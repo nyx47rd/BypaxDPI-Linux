@@ -1,19 +1,77 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use local_ip_address::local_ip;
+use local_ip_address::list_afinet_netifas;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{IpAddr, TcpListener, TcpStream};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use tauri::Emitter;
 use tauri::Manager;
 
-/// PAC sunucusu durumu: thread handle + shutdown flag
+/// Sanal ağ adaptörlerini filtreleyen akıllı LAN IP bulucu.
+/// VirtualBox, VMware, Hamachi, VPN gibi sanal adaptörleri atlar.
+fn get_safe_lan_ip() -> String {
+    // Filtrelenecek sanal adaptör anahtar kelimeleri (küçük harf)
+    const VIRTUAL_KEYWORDS: &[&str] = &[
+        "virtual",
+        "vmware",
+        "vmnet",
+        "vbox",
+        "virtualbox",
+        "pseudo",
+        "hamachi",
+        "vpn",
+        "vethernet",
+        "loopback",
+        "docker",
+        "wsl",
+        "hyper-v",
+        "bluetooth",
+        "teredo",
+        "isatap",
+        "6to4",
+    ];
+
+    if let Ok(netifs) = list_afinet_netifas() {
+        // Önce IPv4 adresleri arasında gerçek adaptörü bul
+        for (name, ip) in &netifs {
+            // Sadece IPv4
+            if let IpAddr::V4(v4) = ip {
+                // Loopback ve link-local adresleri atla
+                if v4.is_loopback() || v4.is_link_local() {
+                    continue;
+                }
+                // Sanal adaptör mü kontrol et
+                let name_lower = name.to_lowercase();
+                let is_virtual = VIRTUAL_KEYWORDS.iter().any(|kw| name_lower.contains(kw));
+                if !is_virtual {
+                    return v4.to_string();
+                }
+            }
+        }
+        // Hiç gerçek adaptör bulunamazsa, sanal olmayanları da dene (IPv4)
+        for (_, ip) in &netifs {
+            if let IpAddr::V4(v4) = ip {
+                if !v4.is_loopback() && !v4.is_link_local() {
+                    return v4.to_string();
+                }
+            }
+        }
+    }
+    // Fallback
+    "127.0.0.1".to_string()
+}
+
+/// PAC sunucusu durumu: thread handle + shutdown flag + dinamik body
 pub struct PacServerState {
     pub join_handle: Mutex<Option<thread::JoinHandle<()>>>,
     pub shutdown: Arc<AtomicBool>,
+    pub pac_body: Arc<Mutex<String>>,
+    pub pac_port: Mutex<u16>,
+    pub pac_url: Mutex<String>,
 }
 
 impl Default for PacServerState {
@@ -21,23 +79,45 @@ impl Default for PacServerState {
         Self {
             join_handle: Mutex::new(None),
             shutdown: Arc::new(AtomicBool::new(false)),
+            pac_body: Arc::new(Mutex::new(make_pac_direct_body())),
+            pac_port: Mutex::new(0),
+            pac_url: Mutex::new(String::new()),
         }
     }
 }
 
-const PAC_PORT: u16 = 8787;
+const PAC_PORT_START: u16 = 8787;
+const PAC_PORT_END: u16 = 8887;
+const SUPPORT_URL: &str = "https://www.patreon.com/join/ConsolAktif";
+
+/// Bağlantı kesildiğinde kullanılan fallback PAC: tüm trafiği DIRECT yönlendirir
+/// Bu sayede cihazlar internet erişimini kaybetmez
+fn make_pac_direct_body() -> String {
+    r#"function FindProxyForURL(url, host) {
+    return "DIRECT";
+}
+"#
+    .to_string()
+}
 
 /// Production PAC: yerel ağ DIRECT, diğerleri PROXY ip:port; DIRECT (fail-safe)
+/// dnsResolve çağrıları try-catch ile korunuyor — DNS timeout olursa PAC script çökmez
 fn make_pac_body(lan_ip: &str, proxy_port: u16) -> String {
     let proxy = format!("{}:{}", lan_ip, proxy_port);
     format!(
         r#"function FindProxyForURL(url, host) {{
     if (isPlainHostName(host) || host === "localhost" || host.indexOf("127.") === 0 ||
-        shExpMatch(host, "*.local") ||
-        isInNet(dnsResolve(host), "192.168.0.0", "255.255.0.0") ||
-        isInNet(dnsResolve(host), "10.0.0.0", "255.0.0.0") ||
-        isInNet(dnsResolve(host), "127.0.0.0", "255.0.0.0"))
+        shExpMatch(host, "*.local"))
         return "DIRECT";
+    try {{
+        var resolved = dnsResolve(host);
+        if (resolved &&
+            (isInNet(resolved, "192.168.0.0", "255.255.0.0") ||
+             isInNet(resolved, "10.0.0.0", "255.0.0.0") ||
+             isInNet(resolved, "172.16.0.0", "255.240.0.0") ||
+             isInNet(resolved, "127.0.0.0", "255.0.0.0")))
+            return "DIRECT";
+    }} catch(e) {{}}
     return "PROXY {}; DIRECT";
 }}
 "#,
@@ -46,7 +126,8 @@ fn make_pac_body(lan_ip: &str, proxy_port: u16) -> String {
 }
 
 fn make_setup_html(pac_url: &str) -> String {
-    format!(r#"<!DOCTYPE html>
+    format!(
+        r#"<!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -115,8 +196,7 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-
-fn handle_pac_request(mut stream: TcpStream, pac_body: &str, pac_url: &str) {
+fn handle_pac_request(mut stream: TcpStream, pac_body: &Arc<Mutex<String>>, pac_url: &str) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
     let mut buf = [0u8; 512];
@@ -149,13 +229,19 @@ fn handle_pac_request(mut stream: TcpStream, pac_body: &str, pac_url: &str) {
         return;
     }
 
+    // PAC body'yi lock'tan oku — bağlantı durumuna göre dinamik olarak değişir
+    let current_pac_body = pac_body
+        .lock()
+        .map(|b| b.clone())
+        .unwrap_or_else(|_| make_pac_direct_body());
+
     let (status, content_type, body) = if !is_get {
         ("404 Not Found", "text/plain", String::new())
     } else if path == "/proxy.pac" {
         (
             "200 OK",
             "application/x-ns-proxy-autoconfig",
-            pac_body.to_string(),
+            current_pac_body,
         )
     } else if path == "/" || path.is_empty() {
         (
@@ -167,8 +253,9 @@ fn handle_pac_request(mut stream: TcpStream, pac_body: &str, pac_url: &str) {
         ("404 Not Found", "text/plain", String::new())
     };
 
+    // Cache-Control: no-cache ekle — cihazlar her seferinde güncel PAC'ı alsın
     let response = format!(
-        "HTTP/1.1 {}\r\nContent-Type: {}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+        "HTTP/1.1 {}\r\nContent-Type: {}\r\nConnection: close\r\nCache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\nContent-Length: {}\r\n\r\n{}",
         status,
         content_type,
         body.len(),
@@ -178,33 +265,93 @@ fn handle_pac_request(mut stream: TcpStream, pac_body: &str, pac_url: &str) {
     let _ = stream.flush();
 }
 
+#[derive(serde::Serialize)]
+struct PacResponse {
+    pac_port: u16,
+}
+
 #[tauri::command]
-fn start_pac_server(proxy_port: u16, state: tauri::State<'_, PacServerState>) -> Result<(), String> {
-    let mut guard = state.join_handle.lock().map_err(|e| e.to_string())?;
-    if guard.is_some() {
-        return Err("PAC sunucusu zaten çalışıyor.".to_string());
+fn start_pac_server(
+    proxy_port: u16,
+    state: tauri::State<'_, PacServerState>,
+) -> Result<PacResponse, String> {
+    let lan_ip = get_safe_lan_ip();
+
+    // PAC body'yi güncelle — proxy moduna geç
+    let new_pac_body = make_pac_body(&lan_ip, proxy_port);
+    if let Ok(mut body) = state.pac_body.lock() {
+        *body = new_pac_body;
     }
-    let lan_ip = local_ip()
-        .ok()
-        .map(|ip| ip.to_string())
-        .unwrap_or_else(|| "127.0.0.1".to_string());
-    let pac_body = make_pac_body(&lan_ip, proxy_port);
-    let pac_url = format!("http://{}:{}/proxy.pac", lan_ip, PAC_PORT);
+
+    // Sunucu zaten çalışıyorsa, sadece body güncellendi — port bilgisini döndür
+    let guard = state.join_handle.lock().map_err(|e| e.to_string())?;
+    if guard.is_some() {
+        let current_port = *state.pac_port.lock().map_err(|e| e.to_string())?;
+        // PAC URL'yi de güncelle (port aynı kalsa bile proxy_port değişmiş olabilir)
+        if let Ok(mut url) = state.pac_url.lock() {
+            *url = format!("http://{}:{}/proxy.pac", lan_ip, current_port);
+        }
+        return Ok(PacResponse {
+            pac_port: current_port,
+        });
+    }
+    drop(guard); // Lock'u serbest bırak
+
+    // Dinamik PAC port: 8787-8887 arasında müsait olanı bul
+    let mut found_port: u16 = 0;
+    let mut listener_result = None;
+    for port in PAC_PORT_START..=PAC_PORT_END {
+        match TcpListener::bind(("0.0.0.0", port)) {
+            Ok(l) => {
+                found_port = port;
+                listener_result = Some(l);
+                break;
+            }
+            Err(_) => continue,
+        }
+    }
+    // Fallback: OS'tan rastgele port iste
+    if listener_result.is_none() {
+        match TcpListener::bind(("0.0.0.0", 0u16)) {
+            Ok(l) => {
+                if let Ok(addr) = l.local_addr() {
+                    found_port = addr.port();
+                }
+                listener_result = Some(l);
+            }
+            Err(e) => return Err(format!("PAC için uygun port bulunamadı: {}", e)),
+        }
+    }
+    let listener = listener_result.unwrap();
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+
+    let pac_url = format!("http://{}:{}/proxy.pac", lan_ip, found_port);
+
+    // State'e kaydet
+    if let Ok(mut p) = state.pac_port.lock() {
+        *p = found_port;
+    }
+    if let Ok(mut u) = state.pac_url.lock() {
+        *u = pac_url.clone();
+    }
+
     let shutdown = Arc::clone(&state.shutdown);
     shutdown.store(false, Ordering::Relaxed);
-
-    let listener = TcpListener::bind(("0.0.0.0", PAC_PORT)).map_err(|e| format!("PAC portu {} açılamadı: {}", PAC_PORT, e))?;
-    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    let pac_body_arc = Arc::clone(&state.pac_body);
+    let pac_url_for_thread = pac_url.clone();
 
     let join_handle = thread::spawn(move || {
         while !shutdown.load(Ordering::Relaxed) {
             match listener.accept() {
                 Ok((stream, _)) => {
-                    let body = pac_body.clone();
-                    let url = pac_url.clone();
-                    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-                    handle_pac_request(stream, &body, &url);
+                    let body = Arc::clone(&pac_body_arc);
+                    let url = pac_url_for_thread.clone();
+                    // Her bağlantıyı ayrı thread'de işle
+                    thread::spawn(move || {
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+                        handle_pac_request(stream, &body, &url);
+                    });
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(100));
@@ -214,18 +361,35 @@ fn start_pac_server(proxy_port: u16, state: tauri::State<'_, PacServerState>) ->
         }
     });
 
+    let mut guard = state.join_handle.lock().map_err(|e| e.to_string())?;
     *guard = Some(join_handle);
+    Ok(PacResponse {
+        pac_port: found_port,
+    })
+}
+
+/// Bağlantı kesildiğinde PAC body'yi DIRECT moduna geçir.
+/// Sunucu çalışmaya devam eder — cihazlar internet erişimini kaybetmez.
+#[tauri::command]
+fn stop_pac_server(state: tauri::State<'_, PacServerState>) -> Result<(), String> {
+    // Sunucuyu kapatmak yerine PAC body'yi DIRECT moduna geçir
+    if let Ok(mut body) = state.pac_body.lock() {
+        *body = make_pac_direct_body();
+    }
     Ok(())
 }
 
-#[tauri::command]
-fn stop_pac_server(state: tauri::State<'_, PacServerState>) -> Result<(), String> {
-    state.shutdown.store(true, Ordering::Relaxed);
-    let mut guard = state.join_handle.lock().map_err(|e| e.to_string())?;
-    if let Some(handle) = guard.take() {
-        let _ = handle.join();
+/// Uygulama tamamen çıkarken PAC sunucusunu gerçekten durdur
+fn force_stop_pac_server(state: &PacServerState) {
+    // Önce body'yi DIRECT yap (güvenlik için)
+    if let Ok(mut body) = state.pac_body.lock() {
+        *body = make_pac_direct_body();
     }
-    Ok(())
+    // Sonra shutdown sinyali gönder
+    state.shutdown.store(true, Ordering::Relaxed);
+    if let Ok(mut guard) = state.join_handle.lock() {
+        let _ = guard.take();
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -265,11 +429,8 @@ fn get_sidecar_config(allow_lan_sharing: bool) -> Result<ConfigResponse, String>
         return Err("Uygun port bulunamadı.".to_string());
     }
 
-    // Yerel IP Adresini Bul (LAN Paylaşımı için)
-    let lan_ip = local_ip()
-        .ok()
-        .map(|ip| ip.to_string())
-        .unwrap_or("127.0.0.1".to_string());
+    // Yerel IP Adresini Bul (LAN Paylaşımı için) — Sanal adaptörleri filtreler
+    let lan_ip = get_safe_lan_ip();
 
     Ok(ConfigResponse {
         port: selected_port,
@@ -278,13 +439,16 @@ fn get_sidecar_config(allow_lan_sharing: bool) -> Result<ConfigResponse, String>
     })
 }
 
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+/// Registry proxy işlemlerini serialize eden global lock
+/// set_system_proxy ve clear_system_proxy eş zamanlı çağrılabilir (reconnect sırasında)
+fn proxy_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 #[tauri::command]
 fn clear_system_proxy() -> Result<(), String> {
+    let _guard = proxy_lock().lock().map_err(|e| e.to_string())?;
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -370,6 +534,7 @@ fn notify_proxy_change() {
 
 #[tauri::command]
 fn set_system_proxy(port: u16) -> Result<(), String> {
+    let _guard = proxy_lock().lock().map_err(|e| e.to_string())?;
     // ✅ Port aralığı validasyonu
     if port < 1024 {
         return Err("Geçersiz port numarası (1024-65535 arası olmalı)".to_string());
@@ -499,23 +664,27 @@ fn check_admin() -> bool {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-        // Basit ve etkili yöntem: 'net session' komutu sadece admin yetkisiyle çalışır
-        // Exit code 0 ise admindir, değilse (veya access denied ise) değildir
-        let status = std::process::Command::new("net")
-            .arg("session")
+        // PowerShell ile token elevation kontrolü — net session'dan daha hızlı
+        // Domain ortamında ağ çağrısı yapmaz
+        let output = std::process::Command::new("powershell")
+            .args(&[
+                "-NoProfile",
+                "-Command",
+                "([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",
+            ])
             .creation_flags(CREATE_NO_WINDOW)
-            .stdout(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
-            .status();
+            .output();
 
-        if let Ok(s) = status {
-            return s.success();
+        if let Ok(out) = output {
+            let result = String::from_utf8_lossy(&out.stdout);
+            return result.trim().eq_ignore_ascii_case("true");
         }
-        return false;
+        false
     }
     #[cfg(not(target_os = "windows"))]
     {
-        // Unix-like sistemlerde uid kontrolü yapılabilir ama şimdilik true dönüyoruz
         true
     }
 }
@@ -524,6 +693,41 @@ fn perform_app_exit(app: &tauri::AppHandle) {
     let _ = clear_system_proxy();
     std::thread::sleep(std::time::Duration::from_millis(200));
     app.exit(0);
+}
+
+/// Uygulama açıldığında eski bypax-proxy süreçlerini temizle (Zombi süreç önleme)
+#[tauri::command]
+fn kill_zombie_sidecar() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        let output = std::process::Command::new("taskkill")
+            .args(&["/F", "/IM", "bypax-proxy.exe"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .map_err(|e| e.to_string())?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        if output.status.success() {
+            Ok(format!("Zombi süreçler temizlendi: {}", stdout.trim()))
+        } else {
+            // "not found" normal bir durum — zombi yoktu demek
+            Ok(format!(
+                "Zombi süreç bulunamadı (normal): {}",
+                stderr.trim()
+            ))
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok("Zombi temizleme sadece Windows'ta desteklenir.".to_string())
+    }
 }
 
 #[tauri::command]
@@ -560,6 +764,7 @@ pub fn run() {
 
                 let _tray = TrayIconBuilder::with_id("tray")
                     .menu(&menu)
+                    .show_menu_on_left_click(false) // ✅ Sol tıkta menü açılmasın, sadece sağ tıkta
                     .icon(app.default_window_icon().unwrap().clone())
                     .tooltip("BypaxDPI - Kapalı")
                     .on_menu_event(|app, event| match event.id.as_ref() {
@@ -573,6 +778,7 @@ pub fn run() {
                         }
                         "show" => {
                             if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.unminimize();
                                 let _ = window.show();
                                 let _ = window.set_focus();
                             }
@@ -580,7 +786,7 @@ pub fn run() {
                         "support" => {
                             use tauri_plugin_opener::OpenerExt;
                             app.opener()
-                                .open_url("https://www.patreon.com/join/ConsolAktif", None::<&str>)
+                                .open_url(SUPPORT_URL, None::<&str>)
                                 .unwrap_or(());
                         }
                         _ => {}
@@ -590,32 +796,40 @@ pub fn run() {
                         move |tray, event| {
                             use tauri::tray::{MouseButton, TrayIconEvent};
 
-                            // ✅ Debounce: 300ms içinde tekrar tıklanırsa ignore et
-                            if is_showing.load(Ordering::Relaxed) {
-                                return;
-                            }
-
                             match event {
+                                // ✅ Sol tık: pencereyi öne getir
                                 TrayIconEvent::Click {
                                     button: MouseButton::Left,
                                     ..
-                                }
-                                | TrayIconEvent::DoubleClick { .. } => {
+                                } => {
+                                    if is_showing.load(Ordering::Relaxed) {
+                                        return;
+                                    }
                                     is_showing.store(true, Ordering::Relaxed);
 
                                     let app = tray.app_handle();
                                     if let Some(window) = app.get_webview_window("main") {
+                                        let _ = window.unminimize();
                                         let _ = window.show();
                                         let _ = window.set_focus();
                                     }
 
-                                    // 300ms sonra flag'i sıfırla
                                     let is_showing_clone = Arc::clone(&is_showing);
                                     std::thread::spawn(move || {
                                         std::thread::sleep(std::time::Duration::from_millis(300));
                                         is_showing_clone.store(false, Ordering::Relaxed);
                                     });
                                 }
+                                // ✅ Çift tık: pencereyi öne getir
+                                TrayIconEvent::DoubleClick { .. } => {
+                                    let app = tray.app_handle();
+                                    if let Some(window) = app.get_webview_window("main") {
+                                        let _ = window.unminimize();
+                                        let _ = window.show();
+                                        let _ = window.set_focus();
+                                    }
+                                }
+                                // Sağ tık: menü otomatik açılır
                                 _ => {}
                             }
                         }
@@ -638,9 +852,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_notification::init())
+        // notification plugin zaten yukarıda kayıtlı, tekrar ekleme
         .invoke_handler(tauri::generate_handler![
-            greet,
             clear_system_proxy,
             set_system_proxy,
             update_tray_tooltip,
@@ -649,6 +862,7 @@ pub fn run() {
             get_sidecar_config,
             start_pac_server,
             stop_pac_server,
+            kill_zombie_sidecar,
             quit_app
         ])
         .build(tauri::generate_context!())
@@ -658,13 +872,7 @@ pub fn run() {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let _ = clear_system_proxy();
                 if let Some(state) = app_handle.try_state::<PacServerState>() {
-                    state.shutdown.store(true, Ordering::Relaxed);
-                    if let Ok(mut guard) = state.join_handle.lock() {
-                        let handle: Option<thread::JoinHandle<()>> = guard.take();
-                        if let Some(h) = handle {
-                            let _ = h.join();
-                        }
-                    }
+                    force_stop_pac_server(&state);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }

@@ -1,10 +1,11 @@
 import Settings from "./Settings";
 import { motion, AnimatePresence } from "framer-motion";
-import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
+// autostart importları Settings.jsx'te kullanılıyor, burada gerek yok
 import { useState, useRef, useEffect, useMemo } from "react";
 import { Command, open } from "@tauri-apps/plugin-shell";
 import { invoke } from "@tauri-apps/api/core";
 import { getTranslations } from "./i18n";
+import { DNS_MAP, DOH_MAP, URLS, APP, RETRY_DELAYS, DPI_TIMEOUTS } from "./constants";
 
 // Re-add missing imports
 import {
@@ -33,11 +34,15 @@ import { QRCodeSVG } from "qrcode.react";
 
 import "./App.css";
 
+// ✅ Constants — constants.js'den import ediliyor (DNS_MAP, DOH_MAP, URLS, APP, RETRY_DELAYS, DPI_TIMEOUTS)
+
 function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [logs, setLogs] = useState([]);
   const [currentPort, setCurrentPort] = useState(8080);
+  const currentPortRef = useRef(8080); // ✅ #6: Stale closure önleme
   const [lanIp, setLanIp] = useState("127.0.0.1"); // ✅ LAN IP State
+  const [pacPort, setPacPort] = useState(8787); // ✅ PAC port (dinamik)
   const [showConnectionModal, setShowConnectionModal] = useState(false); // ✅ Modal State
   const [connectionModalTab, setConnectionModalTab] = useState("pac"); // pac | manual
   const [isProcessing, setIsProcessing] = useState(false);
@@ -45,6 +50,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [isAdmin, setIsAdmin] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine); // ✅ Internet Durumu
+  const [dnsLatencies, setDnsLatencies] = useState({}); // ✅ #5: DNS ping sonuçları kalcı
 
   // Check Admin on Mount
   useEffect(() => {
@@ -104,10 +110,10 @@ function App() {
       autoConnect: false,
       minimizeToTray: false,
       dnsMode: "manual",
-      selectedDns: "system",
+      selectedDns: "cloudflare",
       autoReconnect: true,
-      dpiMethod: "1",
-      httpsChunkSize: 8,
+      dpiMethod: "1", // ✅ Varsayılan: Dengeli mod (0=Turbo, 1=Dengeli, 2=Güçlü)
+      httpsChunkSize: 4,
     };
 
     const saved = localStorage.getItem("bypax_config");
@@ -140,19 +146,11 @@ function App() {
   // ✅ Çıkış işlemi başladı mı? (çift modal engellemek için)
   const isExiting = useRef(false);
   const trayQuitRef = useRef(false);
-  const prevLanSharingRef = useRef(config.lanSharing);
+  const prevLanSharingRef = useRef(config.lanSharing ?? false);
   const prevDpiMethodRef = useRef(config.dpiMethod);
-  const prevChunkSizeRef = useRef(config.httpsChunkSize ?? 8);
+  const prevChunkSizeRef = useRef(config.httpsChunkSize ?? 4);
 
-  // Constants
-  const DNS_MAP = {
-    system: null,
-    cloudflare: "1.1.1.1",
-    adguard: "94.140.14.14",
-    google: "8.8.8.8",
-    quad9: "9.9.9.9",
-    opendns: "208.67.222.222",
-  };
+  // DNS_MAP ve DOH_MAP artık component dışında tanımlı (yukarıda)
 
   const updateConfig = (key, value) => {
     setConfig((prev) => {
@@ -242,17 +240,21 @@ function App() {
     if (!finalMsg || finalMsg.toString().trim().length === 0) return;
 
     const cleanMsg = finalMsg.toString().replace(/\x1b\[[0-9;]*m/g, "");
-    setLogs((prev) => [
-      ...prev.slice(-99),
-      {
-        id: Date.now() + Math.random(),
-        time: new Date().toLocaleTimeString(),
-        msg: cleanMsg,
-        type,
-        i18nKey: i18nKey || null,
-        i18nParams: i18nParams || null,
-      },
-    ]);
+    // ✅ #12: Sadece 100'ü aşınca kırp (her seferinde slice yerine)
+    setLogs((prev) => {
+      const next = [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          time: new Date().toLocaleTimeString(),
+          msg: cleanMsg,
+          type,
+          i18nKey: i18nKey || null,
+          i18nParams: i18nParams || null,
+        },
+      ];
+      return next.length > APP.maxLogs ? next.slice(-APP.maxLogs) : next;
+    });
   };
 
   // Dil değiştiğinde i18n loglarını güncelle
@@ -310,24 +312,24 @@ function App() {
     }
   };
 
-  // ✅ Exponential backoff hesaplama
+  // ✅ Exponential backoff hesaplama — ilk retry'da da 2.5s bekle (TIME_WAIT)
   const getRetryDelay = (attempt) => {
-    const delays = [0, 3000, 6000, 12000, 20000]; // 0s, 3s, 6s, 12s, 20s
-    return delays[Math.min(attempt, delays.length - 1)];
+    return RETRY_DELAYS[Math.min(attempt, RETRY_DELAYS.length - 1)];
   };
 
-  // ✅ Tray tooltip güncelle
+  // ✅ Tray tooltip güncelle — configRef + currentPortRef kullanarak stale closure önlenir
   const updateTrayTooltip = async (status) => {
     try {
       let tooltip = "";
       switch (status) {
         case "connected":
-          const dnsName = DNS_MAP[config.selectedDns]
+          const selectedDns = configRef.current.selectedDns;
+          const dnsName = DNS_MAP[selectedDns]
             ? Object.keys(DNS_MAP)
-                .find((key) => DNS_MAP[key] === DNS_MAP[config.selectedDns])
+                .find((key) => DNS_MAP[key] === DNS_MAP[selectedDns])
                 ?.toUpperCase()
             : "SYSTEM";
-          tooltip = `🟢 BypaxDPI - ${t.statusConnected}\n127.0.0.1:${currentPort}\nDNS: ${dnsName}`;
+          tooltip = `🟢 BypaxDPI - ${t.statusConnected}\n127.0.0.1:${currentPortRef.current}\nDNS: ${dnsName}`;
           break;
         case "disconnected":
           tooltip = `🔴 BypaxDPI - ${t.statusInactive}`;
@@ -356,7 +358,7 @@ function App() {
     }
 
     const currentAttempt = retryCount.current;
-    const maxAttempts = 5;
+    const maxAttempts = APP.maxReconnectAttempts;
 
     if (currentAttempt >= maxAttempts) {
       // Maksimum deneme aşıldı
@@ -412,13 +414,15 @@ function App() {
     }
   };
 
-  // Port açık mı? Rust ile TCP bağlantı dener (fetch proxy'ye özel yanıt beklediği için bazen başarısız oluyordu)
-  const waitForPort = async (port, maxAttempts = 25) => {
+  // Port açık mı? Rust ile TCP bağlantı dener
+  const waitForPort = async (port, maxAttempts = APP.portCheckMaxAttempts) => {
     for (let i = 0; i < maxAttempts; i++) {
       try {
         const open = await invoke("check_port_open", { port });
         if (open) return true;
-      } catch (_) {}
+      } catch (e) {
+        console.warn("Port check error:", e);
+      }
       await new Promise((r) => setTimeout(r, 200));
     }
     return false;
@@ -427,8 +431,11 @@ function App() {
   const startEngine = async (ignoredPort, portRetryCount = 0) => {
     updateTrayTooltip("connecting");
 
+    // ✅ #2: fatalErrorRef'i sıfırla — önceki oturumdaki wpcap hatası yeni bağlantıyı bloklamasın
+    fatalErrorRef.current = false;
+
     // Max 20 retries
-    if (portRetryCount >= 20) {
+    if (portRetryCount >= APP.maxPortRetries) {
       addLog(t.logNoPort, "error", { i18nKey: "logNoPort" });
       setIsProcessing(false);
       return;
@@ -458,7 +465,9 @@ function App() {
     if (childProcess.current) return;
     await clearProxy(true);
 
-    const dnsIP = DNS_MAP[config.selectedDns];
+    // ✅ #3: configRef.current kullan — stale closure önlenir
+    const currentDns = configRef.current.selectedDns;
+    const dnsIP = DNS_MAP[currentDns];
 
     addLog(t.logEngineStarting(port), "info", {
       i18nKey: "logEngineStarting",
@@ -467,9 +476,9 @@ function App() {
 
     // DNS bilgisi
     if (dnsIP) {
-      addLog(t.logDnsUsed(config.selectedDns.toUpperCase(), dnsIP), "info", {
+      addLog(t.logDnsUsed(currentDns.toUpperCase(), dnsIP), "info", {
         i18nKey: "logDnsUsed",
-        i18nParams: [config.selectedDns.toUpperCase(), dnsIP],
+        i18nParams: [currentDns.toUpperCase(), dnsIP],
       });
     } else {
       addLog(t.logDnsDefault, "info", { i18nKey: "logDnsDefault" });
@@ -478,8 +487,8 @@ function App() {
     isRetrying.current = false;
 
     try {
-      // Zaman aşımı: güçlü modda biraz daha toleranslı, hızlı modda daha agresif
-      const TIMEOUT_MS = configRef.current.dpiMethod === "1" ? 3500 : 2500;
+      // ✅ Yeni 3-mod timeout sistemi: 0=Turbo, 1=Dengeli, 2=Güçlü
+      const TIMEOUT_MS = DPI_TIMEOUTS[configRef.current.dpiMethod] ?? 2500;
 
       const listenAddr = `${bindAddr}:${port}`;
 
@@ -494,21 +503,34 @@ function App() {
         "info",
       ];
 
-      // DNS ayarı: sistem veya seçili sağlayıcı (geçersiz key → sistem)
-      if (config.selectedDns === "system" || !dnsIP) {
+      // DNS ayarı: DoH (HTTPS üzerinden) veya sistem DNS'i
+      // DoH kullanımı: ISP'lerin port 53 trafiğini yakalamasını (DNS hijacking) engeller
+      // Hiçbir DLL gerektirmez — binary'nin içinde gömülü
+      if (currentDns === "system" || !dnsIP) {
         args.push("--dns-mode", "system");
       } else {
-        args.push("--dns-addr", `${dnsIP}:53`, "--dns-mode", "udp");
+        const dohUrl = DOH_MAP[currentDns];
+        if (dohUrl) {
+          // DoH: DNS sorguları HTTPS üzerinden → ISP yakalayamaz
+          args.push("--dns-mode", "https", "--dns-https-url", dohUrl);
+        } else {
+          // Fallback: Bilinmeyen sağlayıcı → UDP ile dene
+          args.push("--dns-addr", `${dnsIP}:53`, "--dns-mode", "udp");
+        }
       }
 
-      // Güçlü / Hızlı mod için HTTPS profili (wpcap gerektirmeyecek şekilde: fake-count kullanmıyoruz)
-      const isStrongMode = (configRef.current.dpiMethod || "1") === "1";
-      if (isStrongMode) {
+      // ✅ Yeni 3 Katmanlı DPI Bypass Sistemi
+      // 0 = Turbo: SNI split (en hızlı, hafif DPI için)
+      // 1 = Dengeli: Chunk split BEZ disorder (hızlı + güçlü, çoğu ISP'de çalışır)
+      // 2 = Güçlü: Chunk split + disorder (en güçlü, zor ISP'ler için)
+      const dpiMethod = configRef.current.dpiMethod || "1";
+      if (dpiMethod === "2") {
+        // Güçlü Mod: chunk + disorder (en agresif, latency ekler)
         const chunkSize = [4, 8, 16].includes(
           Number(configRef.current.httpsChunkSize),
         )
           ? String(configRef.current.httpsChunkSize)
-          : "8";
+          : "4";
         args.push(
           "--https-split-mode",
           "chunk",
@@ -516,8 +538,21 @@ function App() {
           chunkSize,
           "--https-disorder",
         );
+      } else if (dpiMethod === "1") {
+        // Dengeli Mod: chunk BEZ disorder (latency eklemez, çoğu ISP'de çalışır)
+        const chunkSize = [4, 8, 16].includes(
+          Number(configRef.current.httpsChunkSize),
+        )
+          ? String(configRef.current.httpsChunkSize)
+          : "4";
+        args.push(
+          "--https-split-mode",
+          "chunk",
+          "--https-chunk-size",
+          chunkSize,
+        );
       } else {
-        // En hafif profil, en düşük gecikme
+        // Turbo Mod (0): sadece SNI split — en düşük gecikme
         args.push("--https-split-mode", "sni");
       }
 
@@ -589,7 +624,18 @@ function App() {
 
         if (friendlyKey) {
           const msg = resolveI18nMessage(friendlyKey, friendlyParams);
-          addLog(msg, type === "warn" ? "warn" : "error", {
+          // Her mesaj tipine uygun renk ata
+          let logType = "info";
+          if (friendlyKey === "logWpcapMissing") {
+            logType = "error";
+          } else if (friendlyKey === "logPortBusy") {
+            logType = "warn";
+          } else if (friendlyKey === "logSpoofReady" || friendlyKey === "logEngineActive") {
+            logType = "success";
+          } else if (friendlyKey === "logInitializing") {
+            logType = "info";
+          }
+          addLog(msg, logType, {
             i18nKey: friendlyKey,
             i18nParams: friendlyParams,
           });
@@ -624,6 +670,7 @@ function App() {
           }
 
           setCurrentPort(port);
+          currentPortRef.current = port;
           try {
             await invoke("set_system_proxy", { port });
             addLog(t.logProxySet(port), "success", {
@@ -650,7 +697,8 @@ function App() {
           if (configRef.current.lanSharing) {
             (async () => {
               try {
-                await invoke("start_pac_server", { proxyPort: port });
+                const pacResult = await invoke("start_pac_server", { proxyPort: port });
+                if (pacResult?.pac_port) setPacPort(pacResult.pac_port);
                 addLog(t.logPacStarted, "success", {
                   i18nKey: "logPacStarted",
                 });
@@ -719,10 +767,11 @@ function App() {
 
           // Kullanıcı kasıtlı kapatmadı - beklenmedik kapanma
           if (isUnexpectedClose) {
-            const warnMsg = `⚠️ ${t.logEngineStopped(data.code)}`;
+            const exitCode = data.code ?? "Bilinmiyor (Zorla Kapatıldı)";
+            const warnMsg = `⚠️ ${t.logEngineStopped(exitCode)}`;
             addLog(warnMsg, "warn", {
               i18nKey: "logEngineStopped",
-              i18nParams: [data.code],
+              i18nParams: [exitCode],
             });
           } else {
             addLog(t.logEngineStoppedGrace, "info", {
@@ -782,6 +831,7 @@ function App() {
         ) {
           connectionConfirmed = true;
           setCurrentPort(port);
+          currentPortRef.current = port;
 
           try {
             await invoke("set_system_proxy", { port: port });
@@ -803,7 +853,8 @@ function App() {
           updateTrayTooltip("connected"); // ✅ Auto-connect başarılı
           if (configRef.current.lanSharing) {
             try {
-              await invoke("start_pac_server", { proxyPort: port });
+              const pacResult = await invoke("start_pac_server", { proxyPort: port });
+              if (pacResult?.pac_port) setPacPort(pacResult.pac_port);
               addLog(t.logPacStarted, "success", { i18nKey: "logPacStarted" });
             } catch (e) {
               addLog(t.logPacStartError(e), "warn", {
@@ -813,12 +864,22 @@ function App() {
             }
           }
         }
-      }, 2000); // (Fail-safe timeout)
+      }, DPI_TIMEOUTS[configRef.current.dpiMethod] ?? 2500); // Mod'a uygun failsafe timeout
     } catch (e) {
       addLog(t.logEngineStartError(e), "error", {
         i18nKey: "logEngineStartError",
         i18nParams: [e],
       });
+
+      // ✅ Sorun 2: Antivirüs uyarısı — spawn başarısızsa Defender engellemiş olabilir
+      const errStr = String(e).toLowerCase();
+      if (errStr.includes("denied") || errStr.includes("access") || errStr.includes("not found") || errStr.includes("os error")) {
+        addLog(
+          "⚠️ " + (t.logAntivirusWarning || "Windows Defender veya antivirüs yazılımınız 'bypax-proxy.exe' dosyasını engellemiş olabilir. Lütfen dosyayı antivirüs dışlama listesine (exclusion) ekleyin."),
+          "warn",
+          { i18nKey: "logAntivirusWarning" }
+        );
+      }
       setIsConnected(false);
       setIsProcessing(false);
       try {
@@ -872,7 +933,7 @@ function App() {
       addLog(t.logServiceStopped, "success", { i18nKey: "logServiceStopped" });
 
       // Eğer kapatma (shutdown) sırasındaysa, bildirim yollama.
-      if (!isAppClosing) {
+      if (!isAppClosingRef.current) {
         notifyUser("BypaxDPI", t.notifDisconnectManual, "disconnect_manual"); // Özel notification event tipi
       }
 
@@ -893,8 +954,8 @@ function App() {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
-  // isAppClosing state - uygulamayı kapatırken/tepsiye alırken sahte disconnect atlaması
-  const [isAppClosing, setIsAppClosing] = useState(false);
+  // ✅ #4: useRef kullanarak stale closure önlenir (useState idi)
+  const isAppClosingRef = useRef(false);
 
   const configRef = useRef(config);
 
@@ -902,12 +963,26 @@ function App() {
     configRef.current = config;
   }, [config]);
 
+  // ✅ "Her şeyin üzerinde tut" ayarı değişince pencereye uygula
+  useEffect(() => {
+    (async () => {
+      try {
+        const win = getCurrentWindow();
+        await win.setAlwaysOnTop(config.alwaysOnTop || false);
+      } catch (e) {
+        console.error("setAlwaysOnTop failed:", e);
+      }
+    })();
+  }, [config.alwaysOnTop]);
+
   // ✅ LAN Sharing değişince bağlı bağlantıyı yeni ayarla yeniden başlat
+  const isRestartingLan = useRef(false);
   useEffect(() => {
     if (prevLanSharingRef.current === config.lanSharing) return;
     prevLanSharingRef.current = config.lanSharing;
 
-    if (!isConnected) return;
+    if (!isConnected || isRestartingLan.current) return;
+    isRestartingLan.current = true;
 
     addLog(t.logLanRestart, "warn", { i18nKey: "logLanRestart" });
 
@@ -935,14 +1010,16 @@ function App() {
 
     setTimeout(() => {
       userIntentDisconnect.current = false;
+      isRestartingLan.current = false;
       setIsProcessing(true);
       startEngine(0);
     }, 2500); // Portun serbest kalması için (SpoofDPI 1.2.1 / TIME_WAIT)
   }, [config.lanSharing, isConnected]);
 
   // ✅ DPI modu veya chunk size değişince bağlı bağlantıyı yeniden başlat
+  const isRestartingDpi = useRef(false);
   useEffect(() => {
-    const chunkSize = config.httpsChunkSize ?? 8;
+    const chunkSize = config.httpsChunkSize ?? 4;
     if (
       prevDpiMethodRef.current === config.dpiMethod &&
       prevChunkSizeRef.current === chunkSize
@@ -951,7 +1028,8 @@ function App() {
     prevDpiMethodRef.current = config.dpiMethod;
     prevChunkSizeRef.current = chunkSize;
 
-    if (!isConnected) return;
+    if (!isConnected || isRestartingDpi.current) return;
+    isRestartingDpi.current = true;
 
     addLog(t.logDpiRestart, "warn", { i18nKey: "logDpiRestart" });
 
@@ -972,6 +1050,7 @@ function App() {
 
     setTimeout(() => {
       userIntentDisconnect.current = false;
+      isRestartingDpi.current = false;
       setIsProcessing(true);
       startEngine(0);
     }, 2500); // Portun serbest kalması için (SpoofDPI 1.2.1 / TIME_WAIT)
@@ -981,10 +1060,15 @@ function App() {
     // Initial cleanup on mount
     (async () => {
       try {
+        // ✅ Sorun 4: Zombi süreçleri temizle (önceki çökme/force kill sonrası kalmış olabilir)
+        await invoke("kill_zombie_sidecar").catch((e) =>
+          console.log("Zombi temizleme:", e)
+        );
+        // ✅ Sorun 1: Proxy'yi temizle (çökme sonrası kalıntı)
         await clearProxy(true);
         updateTrayTooltip("disconnected");
       } catch (e) {
-        console.error("Initial proxy cleanup failed:", e);
+        console.error("Initial cleanup failed:", e);
       }
     })();
 
@@ -994,15 +1078,16 @@ function App() {
       const unlisten = await win.onCloseRequested(async (event) => {
         event.preventDefault();
 
-        // ✅ handleExit zaten çıkış yapıyorsa tekrar modal gösterme
+        // ✅ handleExit zaten çıkış yapıyorsa — hemen kapat, tekrar modal gösterme
         if (isExiting.current) {
+          await getCurrentWindow().destroy();
           return;
         }
 
-        setIsAppClosing(true);
+        isAppClosingRef.current = true;
 
         if (configRef.current.minimizeToTray && !trayQuitRef.current) {
-          setIsAppClosing(false);
+          isAppClosingRef.current = false;
           try {
             await win.hide();
           } catch (e) {
@@ -1020,7 +1105,7 @@ function App() {
             { title: t.confirmExitTitle || "Çıkış" },
           );
           if (!confirmed) {
-            setIsAppClosing(false);
+            isAppClosingRef.current = false;
             if (trayQuitRef.current) {
               trayQuitRef.current = false;
             }
@@ -1037,14 +1122,23 @@ function App() {
           retryTimer.current = null;
         }
 
-        try {
-          if (childProcess.current) {
-            await childProcess.current.kill().catch(() => {});
+        // ✅ Cleanup'ı 3 saniyelik bir timeout ile koru
+        // Windows, çıkış işlemi çok uzarsa "düzgün kapatılmadı" uyarısı gösterir
+        const cleanupPromise = (async () => {
+          try {
+            if (childProcess.current) {
+              await childProcess.current.kill().catch(() => {});
+              childProcess.current = null;
+            }
+            await clearProxy(true);
+          } catch (e) {
+            console.error("Cleanup failed:", e);
           }
-          await clearProxy(true);
-        } catch (e) {
-          console.error("Cleanup failed:", e);
-        }
+        })();
+
+        const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 3000));
+        await Promise.race([cleanupPromise, timeoutPromise]);
+
         try {
           await invoke("quit_app");
         } catch (e) {
@@ -1075,7 +1169,7 @@ function App() {
 
       // Cleanup on unmount
       const cleanup = async () => {
-        setIsAppClosing(true);
+        isAppClosingRef.current = true;
         userIntentDisconnect.current = true; // prevent false notifications on reload/close
         try {
           await invoke("stop_pac_server");
@@ -1114,7 +1208,7 @@ function App() {
 
     // ✅ Flag'i set et — onCloseRequested'ın tekrar modal göstermesini engeller
     isExiting.current = true;
-    setIsAppClosing(true);
+    isAppClosingRef.current = true;
     userIntentDisconnect.current = true; // Reconnect engelle
     addLog(t.logShutdownStarting, "warn", { i18nKey: "logShutdownStarting" });
 
@@ -1124,21 +1218,28 @@ function App() {
       retryTimer.current = null;
     }
 
-    try {
-      if (childProcess.current) {
-        await childProcess.current.kill().catch(() => {});
-        childProcess.current = null;
-        addLog(t.logProcessStopped, "success", {
-          i18nKey: "logProcessStopped",
-        });
-      }
+    // ✅ Cleanup'ı 3 saniyelik timeout ile koru — Windows "düzgün kapatılmadı" uyarısını önler
+    const cleanupPromise = (async () => {
       try {
-        await invoke("stop_pac_server");
-      } catch (_) {}
-      await clearProxy(true);
-    } catch (e) {
-      console.error("Cleanup failed:", e);
-    }
+        if (childProcess.current) {
+          await childProcess.current.kill().catch(() => {});
+          childProcess.current = null;
+          addLog(t.logProcessStopped, "success", {
+            i18nKey: "logProcessStopped",
+          });
+        }
+        try {
+          await invoke("stop_pac_server");
+        } catch (_) {}
+        await clearProxy(true);
+      } catch (e) {
+        console.error("Cleanup failed:", e);
+      }
+    })();
+
+    const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 3000));
+    await Promise.race([cleanupPromise, timeoutPromise]);
+
     try {
       await invoke("quit_app");
     } catch (e) {
@@ -1171,8 +1272,8 @@ function App() {
   useEffect(() => {
     const handleResize = () => {
       // Hedef tasarım boyutları (Tauri config ile uyumlu)
-      const DESIGN_WIDTH = 380;
-      const DESIGN_HEIGHT = 700;
+      const DESIGN_WIDTH = APP.designWidth;
+      const DESIGN_HEIGHT = APP.designHeight;
 
       const currentWidth = window.innerWidth;
       const currentHeight = window.innerHeight;
@@ -1186,9 +1287,15 @@ function App() {
       const scale = Math.min(scaleX, scaleY);
 
       if (scale < 0.99) {
-        document.body.style.zoom = `${scale}`;
+        document.body.style.transform = `scale(${scale})`;
+        document.body.style.transformOrigin = "top left";
+        document.body.style.width = `${100 / scale}%`;
+        document.body.style.height = `${100 / scale}%`;
       } else {
-        document.body.style.zoom = "1";
+        document.body.style.transform = "";
+        document.body.style.transformOrigin = "";
+        document.body.style.width = "";
+        document.body.style.height = "";
       }
     };
 
@@ -1415,7 +1522,7 @@ function App() {
                       "0 4px 14px rgba(59, 130, 246, 0.3)";
                   }}
                   onClick={() =>
-                    open("https://bypaxdpi.vercel.app/how-it-works")
+                    open(URLS.tutorialHowItWorks)
                   }
                 >
                   <HelpCircle size={18} />
@@ -1884,7 +1991,7 @@ function App() {
                       }}
                     >
                       <QRCodeSVG
-                        value={`http://${lanIp}:8787/`}
+                        value={`http://${lanIp}:${pacPort}/`}
                         size={120}
                         level="M"
                       />
@@ -1928,14 +2035,14 @@ function App() {
                       <div
                         className="code-box"
                         onClick={() =>
-                          writeText(`http://${lanIp}:8787/proxy.pac`)
+                          writeText(`http://${lanIp}:${pacPort}/proxy.pac`)
                         }
                         title="Kopyala"
                       >
                         <span
                           style={{ fontSize: "0.8rem", wordBreak: "break-all" }}
                         >
-                          http://{lanIp}:8787/proxy.pac
+                          http://{lanIp}:{pacPort}/proxy.pac
                         </span>
                         <Copy size={16} color="#71717a" />
                       </div>
@@ -2055,7 +2162,7 @@ function App() {
                     e.currentTarget.style.boxShadow =
                       "0 4px 14px rgba(59, 130, 246, 0.3)";
                   }}
-                  onClick={() => open("https://bypaxdpi.vercel.app/proxy")}
+                  onClick={() => open(URLS.tutorialProxy)}
                 >
                   <HelpCircle size={18} />
                   {t.modalTutorial}
@@ -2229,6 +2336,8 @@ function App() {
           onBack={() => setShowSettings(false)}
           config={config}
           updateConfig={updateConfig}
+          dnsLatencies={dnsLatencies}
+          setDnsLatencies={setDnsLatencies}
         />
       )}
     </div>

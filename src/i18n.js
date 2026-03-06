@@ -108,6 +108,7 @@ const translations = {
     logPortRetry: (count) => `Port çakışması, yeni port deneniyor... (${count}/20)`,
     logNoPort: 'Uygun port bulunamadı.',
     logWpcapMissing: 'SpoofDPI, wpcap.dll kütüphanesini bulamadı. Lütfen Npcap veya WinPcap kurun ve ardından uygulamayı yeniden başlatın.',
+    logAntivirusWarning: 'Windows Defender veya antivirüs yazılımınız \'bypax-proxy.exe\' dosyasını engellemiş olabilir. Lütfen dosyayı antivirüs dışlama listesine (exclusion) ekleyin.',
 
     // ===== SETTINGS.JSX =====
     settingsTitle: 'AYARLAR',
@@ -115,10 +116,12 @@ const translations = {
     // Section: Connection Method
     sectionMethod: 'BAĞLANTI YÖNTEMİ',
     sectionMethodWhy: 'Tek ayar, tüm ISS\'ler. LAN ile tüm cihazlarda kullanın. Proxy tabanlı olduğu için oyunlarda ping/jitter yapmaz.',
-    methodStrong: 'Güçlü Mod (Önerilen)',
-    methodStrongDesc: 'Hızlı + güçlü bypass dengesi; günlük kullanım için ideal',
-    methodFast: 'Hızlı Mod',
-    methodFastDesc: 'En düşük gecikme, hafif DPI için',
+    methodStrong: 'Güçlü Mod',
+    methodStrongDesc: 'En güçlü bypass, zor ISP\'ler için (latency ekler)',
+    methodTurbo: 'Turbo Mod',
+    methodTurboDesc: 'En düşük gecikme, hafif DPI için',
+    methodBalanced: 'Dengeli Mod (Önerilen)',
+    methodBalancedDesc: 'Hızlı + güçlü bypass, çoğu ISP\'de çalışır',
 
     // Section: Advanced (Güçlü mod)
     sectionAdvanced: 'GELİŞMİŞ',
@@ -146,6 +149,8 @@ const translations = {
     autoStartDesc: 'Windows açılınca BypaxDPI\'ı başlat',
     minimizeToTray: 'Tepsiye Küçült',
     minimizeToTrayDesc: 'Kapatıldığında arka planda çalışsın',
+    alwaysOnTop: 'Her Şeyin Üzerinde Tut',
+    alwaysOnTopDesc: 'Pencere her zaman diğer pencerelerin üzerinde kalır',
     requireConfirmation: 'İşlem Onayı',
     requireConfirmationDesc: 'Bağlantıyı keserken veya çıkarken sor',
     language: 'UYGULAMA DILI',
@@ -319,6 +324,7 @@ const translations = {
     logPortRetry: (count) => `Port conflict, trying new port... (${count}/20)`,
     logNoPort: 'No available port found.',
     logWpcapMissing: 'SpoofDPI could not find wpcap.dll. Please install Npcap or WinPcap, then restart the application.',
+    logAntivirusWarning: 'Windows Defender or your antivirus software may have blocked \'bypax-proxy.exe\'. Please add the file to your antivirus exclusion list.',
 
     // ===== SETTINGS.JSX =====
     settingsTitle: 'SETTINGS',
@@ -326,10 +332,12 @@ const translations = {
     // Section: Connection Method
     sectionMethod: 'CONNECTION METHOD',
     sectionMethodWhy: 'One setting for all ISPs. Use on all devices via LAN. Proxy-based so no ping/jitter in games.',
-    methodStrong: 'Strong Mode (Recommended)',
-    methodStrongDesc: 'Sweet spot: fast + strong bypass, ideal for daily use',
-    methodFast: 'Fast Mode',
-    methodFastDesc: 'Lowest latency, for light DPI',
+    methodStrong: 'Strong Mode',
+    methodStrongDesc: 'Strongest bypass for tough ISPs (adds latency)',
+    methodTurbo: 'Turbo Mode',
+    methodTurboDesc: 'Lowest latency, for light DPI',
+    methodBalanced: 'Balanced Mode (Recommended)',
+    methodBalancedDesc: 'Fast + strong bypass, works on most ISPs',
 
     // Section: Advanced (Strong mode)
     sectionAdvanced: 'ADVANCED',
@@ -357,6 +365,8 @@ const translations = {
     autoStartDesc: 'Launch Bypax when Windows starts',
     minimizeToTray: 'Minimize to Tray',
     minimizeToTrayDesc: 'Run in background when closed',
+    alwaysOnTop: 'Always on Top',
+    alwaysOnTopDesc: 'Window stays above all other windows',
     requireConfirmation: 'Action Confirmation',
     requireConfirmationDesc: 'Ask before disconnecting or exiting',
     language: 'LANGUAGE',

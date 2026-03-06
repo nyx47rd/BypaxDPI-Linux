@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  ChevronLeft, Globe, Power, Zap, RotateCw, Activity, 
+  ChevronLeft, Globe, Power, Zap, RotateCw, Activity, Pin,
   Youtube, Coffee, AlertTriangle, Check, Wrench, Languages, Bell, Shield, Settings as SettingsIcon
 } from 'lucide-react';
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart';
 import { open, Command } from '@tauri-apps/plugin-shell';
 import { invoke } from '@tauri-apps/api/core';
 import { getTranslations, SUPPORTED_LANGUAGES } from './i18n';
+import { URLS } from './constants';
 import './App.css';
 
 const Toggle = ({ checked, onChange }) => (
@@ -22,7 +23,7 @@ const Toggle = ({ checked, onChange }) => (
   </div>
 );
 
-const Settings = ({ onBack, config, updateConfig }) => {
+const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies }) => {
   const [activeTab, setActiveTab] = useState('general');
   const scrollRef = useRef(null);
 
@@ -31,7 +32,9 @@ const Settings = ({ onBack, config, updateConfig }) => {
       scrollRef.current.scrollTop = 0;
     }
   }, [activeTab]);
-  const [latencies, setLatencies] = useState({});
+  // DNS latencies App.jsx'ten prop olarak geliyor — ayarlardan çıkınca kaybolmaz
+  const latencies = dnsLatencies || {};
+  const setLatencies = setDnsLatencies || (() => {});
   const [isChecking, setIsChecking] = useState(false);
   const [autostartEnabled, setAutostartEnabled] = useState(false);
   const [sortedProviders, setSortedProviders] = useState([]);
@@ -58,15 +61,6 @@ const Settings = ({ onBack, config, updateConfig }) => {
     checkAutostart();
   }, []);
 
-  // Only run auto-latency on initial mount if dnsMode is already 'auto'
-  // (Do NOT re-run every time settings screen opens to avoid changing active DNS)
-  const didAutoCheck = useRef(false);
-  useEffect(() => {
-    if (config.dnsMode === 'auto' && !didAutoCheck.current) {
-      didAutoCheck.current = true;
-      // Only check latencies once on first mount, never on re-opens
-    }
-  }, []);
 
   const checkAutostart = async () => {
     try {
@@ -153,18 +147,15 @@ const Settings = ({ onBack, config, updateConfig }) => {
 
   const handleFixInternet = async () => {
     setFixStatus('fixing');
-    
-    setTimeout(async () => {
-      try {
-        await invoke('clear_system_proxy');
-        setFixStatus('fixed');
-        setTimeout(() => setFixStatus('idle'), 2000);
-      } catch (e) {
-        console.error('Fix failed:', e);
-        setFixStatus('error');
-        setTimeout(() => setFixStatus('idle'), 2000);
-      }
-    }, 1200);
+    try {
+      await invoke('clear_system_proxy');
+      setFixStatus('fixed');
+      setTimeout(() => setFixStatus('idle'), 2000);
+    } catch (e) {
+      console.error('Fix failed:', e);
+      setFixStatus('error');
+      setTimeout(() => setFixStatus('idle'), 2000);
+    }
   };
 
   const currentLang = SUPPORTED_LANGUAGES.find(l => l.code === lang) || SUPPORTED_LANGUAGES[0];
@@ -284,6 +275,17 @@ const Settings = ({ onBack, config, updateConfig }) => {
                   <div className="v2-divider" />
 
                   <div className="v2-item">
+                    <div className="v2-icon blue"><Pin size={20} /></div>
+                    <div className="v2-item-text">
+                      <h3>{t.alwaysOnTop || 'Her Şeyin Üzerinde Tut'}</h3>
+                      <p>{t.alwaysOnTopDesc || 'Pencere her zaman diğer pencerelerin üzerinde kalır'}</p>
+                    </div>
+                    <Toggle checked={config.alwaysOnTop || false} onChange={(v) => updateConfig('alwaysOnTop', v)} />
+                  </div>
+
+                  <div className="v2-divider" />
+
+                  <div className="v2-item">
                     <div className="v2-icon yellow" style={{ background: 'rgba(234, 179, 8, 0.15)', color: '#eab308' }}><AlertTriangle size={20} /></div>
                     <div className="v2-item-text">
                       <h3>{t.requireConfirmation}</h3>
@@ -313,7 +315,7 @@ const Settings = ({ onBack, config, updateConfig }) => {
                 <div className="v2-section-title">{t.sectionMethod}</div>
                 <p style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '0.35rem', marginBottom: '0.75rem', lineHeight: 1.4 }}>{t.sectionMethodWhy}</p>
                 <div className="v2-card">
-                    {/* Hızlı Mod (Önerilen) - Üstte */}
+                    {/* Turbo Mod - En hızlı */}
                     <div 
                       className={`v2-item hover-effect ${config.dpiMethod === '0' ? 'v2-selected' : ''}`}
                       style={{ 
@@ -328,8 +330,8 @@ const Settings = ({ onBack, config, updateConfig }) => {
                         <Activity size={20} className={config.dpiMethod === '0' ? 'active-icon' : ''} />
                       </div>
                       <div className="v2-item-text">
-                        <h3 style={{ color: config.dpiMethod === '0' ? '#facc15' : '' }}>{t.methodFast}</h3>
-                        <p>{t.methodFastDesc}</p>
+                        <h3 style={{ color: config.dpiMethod === '0' ? '#facc15' : '' }}>{t.methodTurbo || 'Turbo Mod'}</h3>
+                        <p>{t.methodTurboDesc || 'En düşük gecikme, hafif DPI için'}</p>
                       </div>
                       <div className={`v2-radio ${config.dpiMethod === '0' ? 'on' : ''}`}>
                          {config.dpiMethod === '0' && <div className="v2-radio-dot" />}
@@ -338,31 +340,56 @@ const Settings = ({ onBack, config, updateConfig }) => {
 
                     <div className="v2-divider" />
 
-                    {/* Güçlü Mod - Altta */}
+                    {/* Dengeli Mod (Önerilen) - Ortada */}
                     <div 
                       className={`v2-item hover-effect ${config.dpiMethod === '1' ? 'v2-selected' : ''}`}
                       style={{ 
-                        background: config.dpiMethod === '1' ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
+                        background: config.dpiMethod === '1' ? 'rgba(34, 197, 94, 0.1)' : 'transparent',
                         opacity: config.dpiMethod === '1' ? 1 : 0.5,
                         cursor: 'pointer',
                         transition: 'all 0.2s ease'
                       }}
                       onClick={() => updateConfig('dpiMethod', '1')}
                     >
-                      <div className="v2-icon blue" style={{ background: config.dpiMethod === '1' ? 'rgba(59, 130, 246, 0.2)' : '' }}>
+                      <div className="v2-icon green" style={{ background: config.dpiMethod === '1' ? 'rgba(34, 197, 94, 0.2)' : '' }}>
                         <Zap size={20} className={config.dpiMethod === '1' ? 'active-icon' : ''} />
                       </div>
                       <div className="v2-item-text">
-                        <h3 style={{ color: config.dpiMethod === '1' ? '#60a5fa' : '' }}>{t.methodStrong}</h3>
-                        <p>{t.methodStrongDesc}</p>
+                        <h3 style={{ color: config.dpiMethod === '1' ? '#4ade80' : '' }}>{t.methodBalanced || 'Dengeli Mod (Önerilen)'}</h3>
+                        <p>{t.methodBalancedDesc || 'Hızlı + güçlü bypass, çoğu ISP\'de çalışır'}</p>
                       </div>
                       <div className={`v2-radio ${config.dpiMethod === '1' ? 'on' : ''}`}>
                          {config.dpiMethod === '1' && <div className="v2-radio-dot" />}
                       </div>
                     </div>
 
-                    {/* Chunk size – tek parça, satırın tamamı, aralarında çizgi yok, eşit boşluk */}
-                    {config.dpiMethod === '1' && (
+                    <div className="v2-divider" />
+
+                    {/* Güçlü Mod - En agresif */}
+                    <div 
+                      className={`v2-item hover-effect ${config.dpiMethod === '2' ? 'v2-selected' : ''}`}
+                      style={{ 
+                        background: config.dpiMethod === '2' ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
+                        opacity: config.dpiMethod === '2' ? 1 : 0.5,
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease'
+                      }}
+                      onClick={() => updateConfig('dpiMethod', '2')}
+                    >
+                      <div className="v2-icon blue" style={{ background: config.dpiMethod === '2' ? 'rgba(59, 130, 246, 0.2)' : '' }}>
+                        <Shield size={20} className={config.dpiMethod === '2' ? 'active-icon' : ''} />
+                      </div>
+                      <div className="v2-item-text">
+                        <h3 style={{ color: config.dpiMethod === '2' ? '#60a5fa' : '' }}>{t.methodStrong || 'Güçlü Mod'}</h3>
+                        <p>{t.methodStrongDesc || 'En güçlü bypass, zor ISP\'ler için (latency ekler)'}</p>
+                      </div>
+                      <div className={`v2-radio ${config.dpiMethod === '2' ? 'on' : ''}`}>
+                         {config.dpiMethod === '2' && <div className="v2-radio-dot" />}
+                      </div>
+                    </div>
+
+                    {/* Chunk size – Dengeli ve Güçlü modda görünür */}
+                    {(config.dpiMethod === '1' || config.dpiMethod === '2') && (
                       <>
                         <div className="v2-divider" />
                         <div style={{ display: 'flex', width: '100%', padding: 0, minHeight: 0, boxSizing: 'border-box' }}>
@@ -371,7 +398,9 @@ const Settings = ({ onBack, config, updateConfig }) => {
                             { value: 8, label: '8' },
                             { value: 16, label: '16' },
                           ].map((opt) => {
-                            const isSelected = Number(config.httpsChunkSize || 8) === opt.value;
+                            const isSelected = Number(config.httpsChunkSize || 4) === opt.value;
+                            const accentColor = config.dpiMethod === '2' ? '#60a5fa' : '#4ade80';
+                            const accentBg = config.dpiMethod === '2' ? 'rgba(59, 130, 246, 0.18)' : 'rgba(34, 197, 94, 0.18)';
                             return (
                               <button
                                 key={opt.value}
@@ -384,8 +413,8 @@ const Settings = ({ onBack, config, updateConfig }) => {
                                   border: 'none',
                                   margin: 0,
                                   padding: '0 12px',
-                                  background: isSelected ? 'rgba(59, 130, 246, 0.18)' : 'transparent',
-                                  color: isSelected ? '#60a5fa' : '#94a3b8',
+                                  background: isSelected ? accentBg : 'transparent',
+                                  color: isSelected ? accentColor : '#94a3b8',
                                   fontSize: '0.9rem',
                                   fontWeight: 600,
                                   cursor: 'pointer',
@@ -404,7 +433,7 @@ const Settings = ({ onBack, config, updateConfig }) => {
                     )}
                 </div>
               </div>
-              {config.dpiMethod === '1' && (
+              {(config.dpiMethod === '1' || config.dpiMethod === '2') && (
                 <p style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '0.35rem', marginBottom: 0, lineHeight: 1.4 }}>{t.chunkSizeDesc}</p>
               )}
 
@@ -673,7 +702,7 @@ const Settings = ({ onBack, config, updateConfig }) => {
                 <div className="v2-card">
                   <div className="v2-dev-profile">
                     <img 
-                      src="https://yt3.ggpht.com/M-YH7dPjl40d2cXHK30at3hYyn1seO_RO4MJ-ee8FMN6wHrRQ6ZVaX48JIwHt0BqZSA3do8N2g=s88-c-k-c0x00ffffff-no-rj" 
+                      src="/consolaktif-logo.jpg" 
                       alt="ConsolAktif"
                       className="v2-avatar-img"
                     />
@@ -683,10 +712,10 @@ const Settings = ({ onBack, config, updateConfig }) => {
                     </div>
                   </div>
                   <div className="v2-dev-actions">
-                     <button className="v2-btn youtube" onClick={() => open('https://youtube.com/@ConsolAktif')}>
+                     <button className="v2-btn youtube" onClick={() => open(URLS.youtube)}>
                        <Youtube size={18} /> {t.devSubscribe}
                      </button>
-                     <button className="v2-btn coffee" onClick={() => open('https://www.patreon.com/join/ConsolAktif')}>
+                     <button className="v2-btn coffee" onClick={() => open(URLS.patreon)}>
                        <Coffee size={18} /> {t.devSupport}
                      </button>
                   </div>
