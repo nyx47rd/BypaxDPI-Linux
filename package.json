@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "npm run update-proxy-icon && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "update-proxy-icon": "node change-icon.js",
@@ -30,6 +30,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.10.0",
     "@vitejs/plugin-react": "^4.6.0",
+    "png-to-ico": "^3.0.1",
     "rcedit": "^5.0.2",
     "vite": "^7.0.4"
   }

@@ -38,6 +38,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "windows": {}
+    "windows": {
+      "nsis": {
+        "installerHooks": "hooks.nsi"
+      }
+    }
   }
 }

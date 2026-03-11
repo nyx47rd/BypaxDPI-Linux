@@ -477,39 +477,43 @@ fn clear_system_proxy() -> Result<(), String> {
             return Err("Failed to clear proxy via registry".to_string());
         }
 
-        // 2. ProxyServer değerini tamamen sil (boş string yaz)
+        // 2. ProxyServer değerini tamamen sil (reg delete)
         let _ = Command::new("reg")
             .args(&[
-                "add",
+                "delete",
                 "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
                 "/v",
                 "ProxyServer",
-                "/t",
-                "REG_SZ",
-                "/d",
-                "",
                 "/f",
             ])
             .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status();
 
-        // 3. ProxyOverride değerini de temizle
+        // 3. ProxyOverride değerini de temizle (reg delete)
         let _ = Command::new("reg")
             .args(&[
-                "add",
+                "delete",
                 "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
                 "/v",
                 "ProxyOverride",
-                "/t",
-                "REG_SZ",
-                "/d",
-                "",
                 "/f",
             ])
             .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status();
 
-        // 4. Notify browsers about the change
+        // 4. DNS Önbelleğini Temizle (Race condition / DNS sorunlarını önler)
+        let _ = Command::new("ipconfig")
+            .arg("/flushdns")
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        // 5. Notify browsers about the change
         notify_proxy_change();
     }
     Ok(())
