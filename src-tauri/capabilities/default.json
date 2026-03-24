@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "BypaxDPI default capabilities — minimal privilege principle",
   "windows": [
     "main"
   ],
@@ -12,79 +12,28 @@
     "core:window:allow-show",
     "core:window:allow-set-focus",
     "core:window:allow-set-always-on-top",
-    "opener:default",
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "binaries/bypax-proxy",
-          "sidecar": true,
-          "args": true
-        },
-        {
-          "name": "ping",
-          "cmd": "ping",
-          "args": true
-        },
-        {
-          "name": "reg",
-          "cmd": "reg",
-          "args": [
-            "add",
-            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
-            "/v",
-            "ProxyEnable",
-            "/t",
-            "REG_DWORD",
-            "/d",
-            "0",
-            "/f"
-          ]
-        },
-        {
-          "name": "reg",
-          "cmd": "reg",
-          "args": [
-            "add",
-            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
-            "/v",
-            "ProxyEnable",
-            "/t",
-            "REG_DWORD",
-            "/d",
-            "1",
-            "/f"
-          ]
-        },
-        {
-          "name": "reg",
-          "cmd": "reg",
-          "args": [
-            "add",
-            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
-            "/v",
-            "ProxyServer",
-            "/t",
-            "REG_SZ",
-            "/d",
-            {
-              "validator": "\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}:\\d+"
-            },
-            "/f"
-          ]
-        }
-      ]
-    },
+    "core:window:allow-unminimize",
+    "core:window:allow-destroy",
+
     {
       "identifier": "shell:allow-spawn",
       "allow": [
         {
           "name": "binaries/bypax-proxy",
           "sidecar": true,
+          "args": [
+            "--clean",
+            "--silent"
+          ]
+        },
+        {
+          "name": "binaries/bypax-proxy",
+          "sidecar": true,
           "args": true
         }
       ]
     },
+
     {
       "identifier": "shell:allow-kill",
       "allow": [
@@ -95,10 +44,28 @@
         }
       ]
     },
-    "shell:allow-open",
-    "process:default",
-    "clipboard-manager:default",
-    "notification:default",
-    "dialog:default"
+
+    "shell:allow-stdin-write",
+
+    "clipboard-manager:allow-write-text",
+
+    "notification:allow-notify",
+    "notification:allow-request-permission",
+    "notification:allow-is-permission-granted",
+
+    "dialog:allow-message",
+    "dialog:allow-ask",
+
+    "process:allow-exit",
+    
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://www.patreon.com/**" },
+        { "url": "https://bypaxdpi.vercel.app/**" },
+        { "url": "https://github.com/ConsolAktif/**" },
+        { "url": "https://youtube.com/**" }
+      ]
+    }
   ]
 }

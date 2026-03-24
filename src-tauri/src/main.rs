@@ -13,7 +13,7 @@ fn main() {
 
             // ProxyEnable = 0 yap
             let _ = std::process::Command::new("reg")
-                .args(&[
+                .args([
                     "add",
                     "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
                     "/v",
@@ -29,7 +29,7 @@ fn main() {
 
             // ProxyServer değerini temizle
             let _ = std::process::Command::new("reg")
-                .args(&[
+                .args([
                     "add",
                     "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
                     "/v",
@@ -45,7 +45,7 @@ fn main() {
 
             // Zombi bypass-proxy süreçlerini de öldür
             let _ = std::process::Command::new("taskkill")
-                .args(&["/F", "/IM", "bypax-proxy.exe"])
+                .args(["/F", "/IM", "bypax-proxy.exe"])
                 .creation_flags(CREATE_NO_WINDOW)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())

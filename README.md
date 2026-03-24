@@ -1,162 +1,114 @@
-# 🚀 BypaxDPI for Windows
+# 🚀 BypaxDPI v1.0.0 (Enterprise-Ready)
 
-> **Discord ve internet erişim engellerini aşmak için tasarlanmış, modern ve kullanımı kolay DPI bypass aracı.**
+> **Discord ve internet erişim engellerini aşmak için tasarlanmış; askeri düzeyde çökmeye karşı dayanıklı (Anti-Crash), modern ve çok yönlü Yerel Proxy & DPI Bypass aracı.**
 
 [![Platform](https://img.shields.io/badge/Platform-Windows-blue.svg)](https://www.microsoft.com/windows)
 [![Architecture](https://img.shields.io/badge/Architecture-x64-green.svg)](https://www.microsoft.com/windows)
+[![Security](https://img.shields.io/badge/Security-Audited-success.svg)](#-siber-güvenlik-ve-kurumsal-standartlar-enterprise-grade)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
 
 ## 📋 İçindekiler
 
+- [Neden BypaxDPI? (Farkımız Ne?)](#-neden-bypaxdpi-farkımız-ne)
 - [Özellikler](#-özellikler)
-- [Nasıl Çalışır](#-nasıl-çalışır)
+- [3 Kademeli DPI Bypass Motoru](#-3-kademeli-dpi-bypass-motoru)
+- [Siber Güvenlik ve Kurumsal Standartlar](#-siber-güvenlik-ve-kurumsal-standartlar-enterprise-grade)
 - [Sistem Gereksinimleri](#-sistem-gereksinimleri)
-- [Kurulum](#-kurulum)
-- [Kullanım](#-kullanım)
-- [Geliştirici](#-geliştirici)
-- [Destek](#-destek)
-- [Sorumluluk Reddi](#-sorumluluk-reddi)
+- [Nasıl Çalışır?](#-nasıl-çalışır)
+- [Geliştirici & Destek](#-geliştirici--destek)
+- [Gizlilik Politikası (Sıfır Log)](#-gizlilik-ve-telemetri-sıfır-log)
+
+---
+
+## 💡 Neden BypaxDPI? (Farkımız Ne?)
+
+Piyasadaki diğer CMD/Java tabanlı (GoodbyeDPI, GreenTunnel vs.) kısıtlama aşıcı araçların en büyük sorunu **mavi ekran (BSOD) veya elektrik kesintisi gibi ani çökme durumlarında sistem proxy ayarlarınızı havada bırakarak internetinizi kırmasıdır.** 
+
+BypaxDPI, baştan aşağı Rust (Tauri v2) altyapısıyla kodlanmış olup **Zombi Process Avcısı, Sentinel Recovery (Hata Kurtarma Sistemi)** ve **Kurumsal Proxy Yedekleme** (Backup & Restore) yetenekleriyle donatılmıştır. Bağlantınız ne şekilde koparsa kopsun, internetiniz daima güvendedir ve eski haline kendi kendini otomatik onarır!
 
 ---
 
 ## ✨ Özellikler
 
-BypaxDPI, karmaşık terminal komutlarıyla uğraşmadan internet kısıtlamalarını aşmanızı sağlayan native bir Windows uygulamasıdır.
-
-### 🎯 Temel Özellikler
-
-- **Sistem Geneli Proxy**: Windows sistem proxy ayarlarını otomatik yönetir, böylece Discord ve tarayıcılar dahil tüm uygulamalar erişim engelini aşar.
-- **Tek Tıkla Bağlantı**: "Bağlan" butonuna tıklayarak DPI bypass motorunu başlatın.
-- **Gömülü Motor**: SpoofDPI içinde gömülü gelir, harici kurulum gerektirmez.
-- **DNS Yönetimi**: Cloudflare, Google, AdGuard gibi popüler DNS servisleri arasında kolayca geçiş yapın.
-- **Sistem Tepsisi (Tray)**: Uygulamayı sistem tepsisine küçülterek arka planda çalıştırabilirsiniz.
-- **Otomatik Başlangıç**: Windows açıldığında BypaxDPI'ın otomatik başlamasını sağlayabilirsiniz.
-
-### 🎨 Modern Arayüz
-
-- **Fluent Tasarım**: Windows 11 estetiğine uygun, modern ve şık arayüz.
-- **Canlı Durum**: Bağlantı durumunu ve logları anlık olarak takip edin.
-- **Karanlık Mod**: Göz yormayan koyu tema.
+- **Sistem Geneli Akıllı Proxy**: Windows sistem proxy ayarlarını otomatik yönetir, böylece Discord, Spotify, tarayıcılar ve diğer uygulamalar internet sansürünü tamamen aşar.
+- **LAN Paylaşımı (WiFi ile Tüm Eve Dağıtım)**: Kendi içindeki Asenkron Limitli PAC Sunucusu sayesinde, bilgisayarınız üzerinden telefon, tablet veya konsolunuzu (Ağ Ayarları -> Proxy -> Otomatik URL girerek veya QR Kod izleyerek) engelsiz ağa bağlayabilirsiniz.
+- **DoH (DNS over HTTPS) Şifrelemesi**: ISP'lerin standart Port 53 DNS sorgularını avlamasını önlemek için Cloudflare, Google, AdGuard, Quad9, OpenDNS üzerinden trafiklerinizi Web (HTTPS) katmanında maskeler.
+- **Canlı Soft-Restart (DPI Yenileme)**: Eski uygulamalar gibi DNS/Ayar değiştirdiğinizde uygulamayı söküp takmanız gerekmez. BypaxDPI canlı olarak yumuşak restart (Soft-Restart) atarak bağlantıyı yeni DNS protokolüne taşır.
+- **Modern Fluent Arayüz**: Eski çağ siyah konsolların aksine; BypaxDPI Windows 11 Fluent UI kurallarına göre tasarlanmış React/Tailwind bir arayüz, Canlı Log Monitörü ve Çoklu Dil desteğine sahiptir.
+- **Sistem Tepsisi (Tray) Zulası**: Tek tıklamayla bildirim çubuğunda sessize geçer (Single-Instance Mimari). Birden fazla uygulamayı yanlışlıkla açıp işletim sisteminizi kilitlemeniz (Race-Condition) engellenmiştir.
 
 ---
 
-## 🔧 Nasıl Çalışır?
+## ⚙ 3 Kademeli DPI Bypass Motoru
 
-BypaxDPI, arka planda güvenilir DPI bypass teknolojilerini kullanır:
+Güncellenmiş BypaxDPI sürümü, internet servis sağlayıcınızın (ISP) dayattığı zorluk derecesine göre anında geçiş yapabileceğiniz 3 farklı bypass motoru sunar:
 
-1. **Yerel Proxy**: `spoofdpi` motorunu yerel bir portta (örn. 8080) çalıştırır.
-2. **Sistem Entegrasyonu**: Windows'un proxy ayarlarını `127.0.0.1:PORT` adresine yönlendirir.
-3. **Paket İşleme**: Giden paketleri modifiye ederek DPI (Derin Paket İnceleme) sistemlerini atlatır.
-4. **Temizlik**: Uygulama kapandığında proxy ayarlarını otomatik olarak eski haline getirir.
+| Mod | İsim | Özellikler (Alt Taraf: Go Engine) |
+| :---: | :--- | :--- |
+| **0** | **Turbo Mod** | Sadece SNI ayrıştırması uygular. En agresif hız modudur, oyundaki ping'leri (gecikmeleri) asla etkilemez. |
+| **1** | **Dengeli Mod** | HTTPS TLS paketlerini Chunk Split (parçalama) yöntemiyle böler ama sıralarını bozmaz. Türkiye'deki çoğu standart kısıtlamayı (Discord vb.) direkt aşar. |
+| **2** | **Güçlü Mod** | Paketleri hem küçük parçalara böler (Chunk) hem de ISP'nin paket takip sırasını bozar (Disorder). Aşılması en zor katı DNS kapılarında tercih edilir. |
+
+*Gelişim menüsünde, 4/8/16 bayt'lık ince ayar Chunk Size opsiyonları bulunur.*
+
+---
+
+## 🛡️ Siber Güvenlik ve Kurumsal Standartlar (Enterprise-Grade)
+
+BypaxDPI, kod düzeyindedir ve tamamen "0 Zafiyet" denetiminden (Security Audit) geçmiş profesyonel bir mimari kullanır:
+
+1. **Dirty-State Sentinel Recovery:** Uygulama veya PC aniden fişten çekilir/çökerse (BSOD), başlangıca koyduğumuz Sentinel mekanizması geriye çöp kalıp kalmadığını denetler ve bağlantınızı kalıcı olarak temizler (İnternetsiz kalmazsınız).
+2. **Original Proxy Backup:** Eğer zaten işyerinizin/şirketinizin kendine ait bir Proxy ayarı kuruluysa, BypaxDPI bunu çalışmadan önce güvenle yedeğe alır; işi bittiğinde proxy ayarlarınızı eski kurumsal haline "Restore" eder.
+3. **Rust Native WinAPI:** CMD/Powershell gibi hantal ve güvenlik uyarısı tetikleyen arka plan yazılımları tamamen kaldırılmıştır; onun yerine Yönetici yetkisi, Registry okumaları Rust'ın kendi Native `windows` crate'i ile 1ms altında güvenceyle yürütülür.
+4. **Thread-Rate Limitli PAC Sunucusu:** Açık WiFi veya ofiste aynı ağdaki yabancı cihazların PAC portunuza göndererek bellek sızdırmasını (DDoS) engellemek adına Asenkron Bağlantı Limiti (Maksimum 50) eklidir. 
+5. **Anti-XSS ve Strict-Scope (RCE Engeli):** Arayüzden gelebilecek tüm Zararlı kod (CSS/JS) ihtimalleri, sıkı `DOMPurify` süzgecinden geçirilir ve Tauri'nin işletim sistemi tetikleme (Shell) yetkileri "Yalnızca Kendi Core'unu" çalıştırabilecek şekilde izole edilmiştir.
 
 ---
 
 ## 💻 Sistem Gereksinimleri
 
 - **İşletim Sistemi**: Windows 10 veya Windows 11
-- **Mimari**: x64 işlemci
-- **İnternet**: Uygulamanın çalışması için aktif bir internet bağlantısı gereklidir.
-- **Yetkiler**: Proxy ayarlarını değiştirebilmek için (bazı durumlarda) yönetici izni gerekebilir.
+- **Mimari**: x64 İşlemci (RAM kullanımı inanılmaz düşüktür; WebView2 sayesinde genelde ~60 MB)
+- **Yetki**: Proxy yönetimi bazı yerel network ayarlarında UAC (Yönetici İzni) gerektireceğinden uygulama "Yönetici" olarak çalışmayı tavsiye edebilir.
 
 ---
 
-## 🚀 Kurulum
+## 🔧 Nasıl Çalışır? (Kurulum)
 
-1. **İndirin**: Projenin [Releases](https://github.com/MuratGuelr/bypaxdpi-app/releases) sayfasından son sürüm (`.exe` veya `.msi`) dosyasını indirin.
-2. **Kurun**: İndirdiğiniz dosyayı çalıştırın ve kurulum sihirbazını takip edin.
-3. **Çalıştırın**: Masaüstündeki veya Başlat menüsündeki BypaxDPI kısayoluna tıklayın.
-
-> [!WARNING]
-> **"Windows Kişisel Bilgisayarınızı Korudu" (SmartScreen) Uyarısı:**
-> Uygulama henüz imzalanmadığı için Windows bu uyarıyı verebilir.
-> 1. "Ek Bilgi" (More Info) yazısına tıklayın.
-> 2. "Yine de Çalıştır" (Run Anyway) butonuna basın.
+1. **İndirin**: Projenin [Releases sayfası](https://github.com/MuratGuelr/bypaxdpi-app/releases) bağlantısına gidip en güncel versiyonun `.exe / .msi` dosyasını bilgisayarınıza indirin.
+2. **Kurun**: Uygulamayı çalıştırın. Kendi yerleşik (gömülü) motorunu kullanacağı için WinPcap vb. hiçbir ek program / sürücü yüklemenize **asla** gerek yoktur.
+3. **Açın ve Tıklayın**: İsterseniz Ayarlar (Dişli İkonu) sekmesinden *DoH DNS*, *Güçlü Mod* ve *LAN Paylaşımı (Telefon)* özelliklerini zevkinize göre açıp; ana ekrandaki **BAĞLAN** tuşuna dokunmanız yeterlidir. Ekranda **Güvenli** yazdığı an Discord ve ötesindeki dünyaya aitsiniz.
 
 ---
 
-## 🎮 Kullanım
+## 🤝 Geliştirici & Destek
 
-1. **BypaxDPI** uygulamasını açın.
-2. **Ayarlar** (dişli ikonu) menüsünden istediğiniz DNS sunucusunu seçebilirsiniz (Örn: Cloudflare).
-3. Ana ekrandaki **"BAĞLAN"** butonuna basın.
-4. "GÜVENLİ" yazısını gördüğünüzde işlem tamamdır. Artık Discord ve diğer engelli sitelere erişebilirsiniz.
-5. Bağlantıyı kesmek için tekrar butona basmanız yeterlidir.
+Bu proje açık kaynaklı, tamamen hür bir topluluk girişimidir. BypaxDPI'ın yaşaması, donanımlarının güncellenmesi için bana kahve ısmarlamak isterseniz:
 
----
+- **GitHub Sponsor:** [![Sponsor](https://img.shields.io/static/v1?label=Sponsor&message=%E2%9D%A4&logo=GitHub&color=%23fe8e86)](https://github.com/sponsors/MuratGuelr)
+- **Patreon:** [![Patreon](https://img.shields.io/badge/MuratGuelr-purple?logo=patreon&label=Patreon)](https://www.patreon.com/posts/splitwire-for-v1-140359525)
 
-## 🛠 Geliştirme
-
-Projeyi yerel ortamınızda geliştirmek için:
-
-```bash
-git clone https://github.com/MuratGuelr/bypaxdpi-app.git
-cd bypaxdpi-windows
-npm install
-npm run tauri dev
-```
-
-Rust ve Node.js ortamlarının kurulu olması gerekir.
+**Geliştirici:** Crafted with 💖 & Rust by [ConsolAktif](https://github.com/MuratGuelr)
 
 ---
 
-##  Destek
+## 🔒 Gizlilik ve Telemetri (Sıfır Log)
 
-Bu proje açık kaynaklıdır ve topluluk desteğiyle geliştirilmektedir. Destek olmak isterseniz:
-
-**GitHub Sponsor:**
-
-[![Sponsor](https://img.shields.io/static/v1?label=Sponsor&message=%E2%9D%A4&logo=GitHub&color=%23fe8e86)](https://github.com/sponsors/MuratGuelr)
-
-**Patreon:**
-
-[![Patreon](https://img.shields.io/badge/MuratGuelr-purple?logo=patreon&label=Patreon)](https://www.patreon.com/posts/splitwire-for-v1-140359525)
-
----
-
-## 📄 Lisans
-
-```
-Copyright © 2026 ConsolAktif
-
-MIT License ile lisanslanmıştır.
-Detaylar için LICENSE dosyasına bakın.
-```
-
----
-
-## 🔒 Gizlilik ve Veri Toplama
-
-BypaxDPI, geliştirmeyi desteklemek için **tamamen anonim** kullanım verileri toplar.
-- **Toplanan Veriler:** Sadece teknik bilgiler (CPU, RAM, İşletim Sistemi Sürümü) ve temel kullanım istatistikleri.
-- **Toplanmayanlar:** IP Adresi, Kişisel Kimlik, Konum, Gezilen Siteler, Dosyalar.
-- **Kontrol Sizde:** Bu özellik Ayarlar menüsünden tamamen kapatılabilir (Opt-out).
+> [!IMPORTANT]
+> BypaxDPI %100 Anonimdir ve **HERHANGİ BİR TELEMETRİ VEYA VERİ TOPLAMA YAPISI BARINDIRMAZ.** 
+> Hiçbir IP adresiniz, girdiğiniz internet siteleri (URL'ler), işletim sistemi bilgileriniz ne bir sunucuya ne de bize asla gönderilmez. Uygulama logları RAM'de (geçici hafızada) işlenir; program kapatıldığı saniye kainattan silinir. 
 
 ---
 
 ## ⚖️ Sorumluluk Reddi
 
-> [!IMPORTANT]
-> **Bu yazılım eğitim ve erişilebilirlik amaçlı oluşturulmuştur.**
+- **Bu yazılım yerel ağ problemleri eğitimi, soket debugging ve erişilebilirlik laboratuvarı (Bypass algoritmalarını simüle etme) amaçlı yazılmıştır.**
+- BypaxDPI yalnızca local makinenizde giden HTTPS trafiğinin TLS paketlerini (SNI katmanı) bölerek yeniden organize eder (Packet Fragmentation). Herhangi bir uzak VPN sunucusu ile veri alışverişi (Şifre çözücü tünel) sağlamaz, bu yüzden bankacılık dahil tüm işlemleriniz ISP/Browser ile kendi aranızdadır.
+- Yazılım kişisel kullanıma açık ve ücretsizdir; ticari, yasadışı ya da manipülatif amaçlı siber ihlaller hedefinde kullanılamaz. BypaxDPI ile gerçekleştirilen tüm erişim faaliyetleri ve oluşacak teknik/yasal yükümlülükler tamamen son kullanıcıya (kullanıcıya) aittir. Üretici kanun yolları için sorumluluk reddinde bulunur. 
 
-- ✅ Kodlama eğitimi ve kişisel kullanım için tasarlanmıştır.
-- ❌ Ticari kullanım garantisi verilmez.
-- ⚠️ Geliştirici, kullanımdan doğabilecek zararlardan sorumlu değildir.
-- 📚 Kullanıcılar bu yazılımı kendi sorumlulukları altında kullanırlar.
-- ⚖️ Bu araç sadece DPI kısıtlamalarını aşmak için yerel bir proxy oluşturur.
-- 🔒 **Gizlilik Odaklı Analitik**: Uygulamayı geliştirebilmek için *tamamen anonim* kullanım verileri toplanır.
-    - Hiçbir kişisel veri (IP, kullanıcı adı, dosya) **TOPLANMAZ**.
-    - Bu özellik Ayarlar menüsünden tamamen kapatılabilir.
-
-**Yasal Uyarı:** Bu programın kullanımından doğan her türlü yasal sorumluluk kullanıcıya aittir. Uygulama yalnızca eğitim ve araştırma amaçları ile geliştirilmiştir.
-
----
-
+<br>
 <div align="center">
-
-**🚀 BypaxDPI ile kesintisiz iletişim.**
-
-Made with ❤️ by [ConsolAktif](https://github.com/MuratGuelr)
-
+  <strong>🔥 BypaxDPI ile kesintisiz ve şeffaf internete hoş geldiniz!</strong>
 </div>

@@ -3,7 +3,7 @@ name = "bypaxDPI"
 version = "1.0.0"
 description = "Dpi Bypass Tool."
 authors = ["ConsolAktif"]
-edition = "2024"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -24,7 +24,6 @@ tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-process = "2"
-tauri-plugin-positioner = "2.3.1"
 tauri-plugin-clipboard-manager = "2.3.2"
 
 local-ip-address = "0.6.10"
@@ -35,7 +34,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["wininet"] }
+winapi = { version = "0.3", features = ["wininet", "synchapi", "errhandlingapi", "winerror", "processthreadsapi", "securitybaseapi", "handleapi", "winnt"] }
+winreg = "0.52"
 
 # ✅ Release optimizasyonları ekle
 [profile.release]
@@ -43,5 +43,4 @@ opt-level = "z"      # Size optimize (s yerine z)
 lto = true           # Link-time optimization
 codegen-units = 1    # Tek thread compile (daha küçük binary)
 strip = true         # Debug sembolleri kaldır
-panic = "abort"      # Panic'te unwind yok (daha küçük)
-
+panic = "unwind"     # P0-FIX: Crash anında Cleanup (Drop trait) çalışabilmesi için unwind aktif edildi

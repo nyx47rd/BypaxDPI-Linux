@@ -21,8 +21,8 @@ if (!fs.existsSync(spoofdpiDir)) {
   fs.mkdirSync(spoofdpiDir, { recursive: true });
 }
 
-console.log('Building SpoofDPI (bypax-proxy)...');
-const go = spawnSync('go', ['build', '-o', outExe, './cmd/spoofdpi'], {
+console.log('Building SpoofDPI (bypax-proxy) with release flags...');
+const go = spawnSync('go', ['build', '-trimpath', '-ldflags=-s -w', '-o', outExe, './cmd/spoofdpi'], {
   cwd: spoofDpiDir,
   stdio: 'inherit',
   shell: true,

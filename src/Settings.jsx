@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   ChevronLeft, Globe, Power, Zap, RotateCw, Activity, Pin,
   Youtube, Coffee, AlertTriangle, Check, Wrench, Languages, Bell, Shield, Settings as SettingsIcon
 } from 'lucide-react';
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart';
-import { open, Command } from '@tauri-apps/plugin-shell';
+import { Command } from '@tauri-apps/plugin-shell';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { invoke } from '@tauri-apps/api/core';
 import { getTranslations, SUPPORTED_LANGUAGES } from './i18n';
 import { URLS } from './constants';
@@ -44,18 +45,27 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
   const t = getTranslations(lang);
 
   // DNS Providers with translations
-  const DNS_PROVIDERS = [
+  // P2-FIX: Bellek sızıntısı önlendi - Her renderda tekrardan oluşmasını engelledik
+  const DNS_PROVIDERS = useMemo(() => [
     { id: 'system', name: t.dnsSystemDefault, desc: t.dnsSystemDefaultDesc, ip: null },
     { id: 'cloudflare', name: 'Cloudflare', desc: t.dnsCfDesc, ip: '1.1.1.1' },
     { id: 'adguard', name: 'AdGuard', desc: t.dnsAdguardDesc, ip: '94.140.14.14' },
     { id: 'google', name: 'Google', desc: t.dnsGoogleDesc, ip: '8.8.8.8' },
     { id: 'quad9', name: 'Quad9', desc: t.dnsQuad9Desc, ip: '9.9.9.9' },
     { id: 'opendns', name: 'OpenDNS', desc: t.dnsOpenDnsDesc, ip: '208.67.222.222' }
-  ];
+  ], [t]);
 
+  // P2-FIX: Dil değiştirildiğinde mevcut internet gecikmesi (Ping) sırasının kalıcı olması sağlandı
   useEffect(() => {
-    setSortedProviders(DNS_PROVIDERS);
-  }, [lang]);
+    if (Object.keys(latencies).length > 0) {
+      const systemDns = DNS_PROVIDERS.find(p => p.id === 'system');
+      const otherDns = DNS_PROVIDERS.filter(p => p.id !== 'system')
+        .sort((a, b) => (latencies[a.id] || 999) - (latencies[b.id] || 999));
+      setSortedProviders(systemDns ? [systemDns, ...otherDns] : otherDns);
+    } else {
+      setSortedProviders(DNS_PROVIDERS);
+    }
+  }, [lang, latencies, DNS_PROVIDERS]);
 
   useEffect(() => {
     checkAutostart();
@@ -96,23 +106,11 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
 
     const results = await Promise.allSettled(
       pingableProviders.map(async (provider) => {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS + 500); 
-        
         try {
-          const command = Command.create('ping', [
-            provider.ip, 
-            '-n', '1', 
-            '-w', String(TIMEOUT_MS) 
-          ]);
-          
-          const output = await command.execute();
-          clearTimeout(timeoutId);
-          
-          const match = output.stdout.match(/(?:time|süre|zaman)[=<\s]+([\d]+)\s*ms/i);
-          return { id: provider.id, latency: match ? parseInt(match[1], 10) : 999 };
+          // P0-FIX: Frontend shell bypass edildi, güvenli arka uç kullanılıyor.
+          const latency = await invoke('check_dns_latency', { dnsIp: provider.ip });
+          return { id: provider.id, latency };
         } catch (e) {
-          clearTimeout(timeoutId);
           console.error(`Ping failed for ${provider.name}:`, e);
           return { id: provider.id, latency: 999 };
         }
@@ -146,9 +144,16 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
   };
 
   const handleFixInternet = async () => {
+    if (fixStatus === 'fixing') return; // P2-FIX: Rapid click guard
     setFixStatus('fixing');
     try {
       await invoke('clear_system_proxy');
+      
+      // P1-FIX: Ana ekrandaki bağlantı durumunu eşzamanlı güncelle
+      window.dispatchEvent(new CustomEvent('bypax-force-disconnect', {
+        detail: { reason: 'manual-fix' }
+      }));
+      
       setFixStatus('fixed');
       setTimeout(() => setFixStatus('idle'), 2000);
     } catch (e) {
@@ -712,10 +717,10 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
                     </div>
                   </div>
                   <div className="v2-dev-actions">
-                     <button className="v2-btn youtube" onClick={() => open(URLS.youtube)}>
+                     <button className="v2-btn youtube" onClick={() => openUrl(URLS.youtube)}>
                        <Youtube size={18} /> {t.devSubscribe}
                      </button>
-                     <button className="v2-btn coffee" onClick={() => open(URLS.patreon)}>
+                     <button className="v2-btn coffee" onClick={() => openUrl(URLS.patreon)}>
                        <Coffee size={18} /> {t.devSupport}
                      </button>
                   </div>

@@ -2,12 +2,14 @@ import Settings from "./Settings";
 import { motion, AnimatePresence } from "framer-motion";
 // autostart importları Settings.jsx'te kullanılıyor, burada gerek yok
 import { useState, useRef, useEffect, useMemo } from "react";
-import { Command, open } from "@tauri-apps/plugin-shell";
+import { Command } from "@tauri-apps/plugin-shell";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import { getTranslations } from "./i18n";
 import { DNS_MAP, DOH_MAP, URLS, APP, RETRY_DELAYS, DPI_TIMEOUTS } from "./constants";
 
 // Re-add missing imports
+import DOMPurify from "dompurify";
 import {
   Power,
   Shield,
@@ -35,6 +37,8 @@ import { QRCodeSVG } from "qrcode.react";
 import "./App.css";
 
 // ✅ Constants — constants.js'den import ediliyor (DNS_MAP, DOH_MAP, URLS, APP, RETRY_DELAYS, DPI_TIMEOUTS)
+
+const PURIFY_CONFIG = { ALLOWED_TAGS: ['strong', 'em', 'br', 'span', 'b'], ALLOWED_ATTR: ['class'] };
 
 function App() {
   const [isConnected, setIsConnected] = useState(false);
@@ -119,7 +123,22 @@ function App() {
     const saved = localStorage.getItem("bypax_config");
     if (saved) {
       try {
-        return { ...defaultSettings, ...JSON.parse(saved) };
+        // P1-FIX: LocalStorage Obfuscation (Uyumluluk için önce düz metin mi kontrol et)
+        let parsedStr = saved;
+        if (!saved.startsWith("{")) {
+          parsedStr = decodeURIComponent(escape(atob(saved))); // Geriye dönük uyumluluk (eski config)
+        }
+        const parsed = JSON.parse(parsedStr);
+        if (typeof parsed !== 'object' || parsed === null) return defaultSettings;
+        
+        // P1-FIX: Load esnasında Sidecar Injection'u engellemek için tip güvenlik (Config Validation)
+        return { 
+          ...defaultSettings, 
+          ...parsed,
+          dpiMethod: ['0', '1', '2'].includes(String(parsed.dpiMethod)) ? String(parsed.dpiMethod) : defaultSettings.dpiMethod,
+          httpsChunkSize: [4, 8, 16, 32, 64, 128].includes(Number(parsed.httpsChunkSize)) ? Number(parsed.httpsChunkSize) : defaultSettings.httpsChunkSize,
+          selectedDns: typeof parsed.selectedDns === 'string' ? parsed.selectedDns : defaultSettings.selectedDns,
+        };
       } catch (e) {
         console.error("Failed to parse config:", e);
         return defaultSettings;
@@ -135,6 +154,7 @@ function App() {
   );
 
   const childProcess = useRef(null);
+  const isStartingEngine = useRef(false);
   const logsEndRef = useRef(null);
   const isRetrying = useRef(false);
 
@@ -149,12 +169,15 @@ function App() {
   const prevLanSharingRef = useRef(config.lanSharing ?? false);
   const prevDpiMethodRef = useRef(config.dpiMethod);
   const prevChunkSizeRef = useRef(config.httpsChunkSize ?? 4);
+  const prevSelectedDnsRef = useRef(config.selectedDns);
+  const prevDnsModeRef = useRef(config.dnsMode);
 
   // DNS_MAP ve DOH_MAP artık component dışında tanımlı (yukarıda)
 
   const updateConfig = (key, value) => {
     setConfig((prev) => {
       const newConfig = { ...prev, [key]: value };
+      // P1-FIX: Base64 kodlaması kaldırıldı, plaintext validasyonlu yazılıyor
       localStorage.setItem("bypax_config", JSON.stringify(newConfig));
       return newConfig;
     });
@@ -429,6 +452,10 @@ function App() {
   };
 
   const startEngine = async (ignoredPort, portRetryCount = 0) => {
+    // P2-FIX: Asynchronous execution lock -> Aynı anda iki instance spawn edilmesini önler
+    if (isStartingEngine.current || childProcess.current) return;
+    isStartingEngine.current = true;
+
     updateTrayTooltip("connecting");
 
     // ✅ #2: fatalErrorRef'i sıfırla — önceki oturumdaki wpcap hatası yeni bağlantıyı bloklamasın
@@ -438,6 +465,7 @@ function App() {
     if (portRetryCount >= APP.maxPortRetries) {
       addLog(t.logNoPort, "error", { i18nKey: "logNoPort" });
       setIsProcessing(false);
+      isStartingEngine.current = false;
       return;
     }
 
@@ -459,10 +487,14 @@ function App() {
         i18nParams: [e],
       });
       setIsProcessing(false);
+      isStartingEngine.current = false;
       return;
     }
 
-    if (childProcess.current) return;
+    if (childProcess.current) {
+        isStartingEngine.current = false;
+        return;
+    }
     await clearProxy(true);
 
     // ✅ #3: configRef.current kullan — stale closure önlenir
@@ -821,6 +853,8 @@ function App() {
 
       const child = await command.spawn();
       childProcess.current = child;
+      invoke("save_sidecar_pid", { pid: child.pid }).catch(console.warn);
+      isStartingEngine.current = false; // Mülkiyeti childProcess'e devret
 
       // Failsafe timeout
       setTimeout(async () => {
@@ -829,6 +863,18 @@ function App() {
           !connectionConfirmed &&
           !isRetrying.current
         ) {
+          // P1-FIX: Proxy'yi Windows'a yazmadan önce uygulamanın gerçekten port dinlediğini TCP ile doğrula
+          const portReady = await waitForPort(port, 3);
+          if (!portReady) {
+            addLog(t.logFailsafePortClosed || "Beklenmeyen Hata: Proxy başlatılamadı", "error");
+            if (childProcess.current) {
+              childProcess.current.kill().catch(() => {});
+              childProcess.current = null;
+            }
+            setIsProcessing(false);
+            return;
+          }
+
           connectionConfirmed = true;
           setCurrentPort(port);
           currentPortRef.current = port;
@@ -866,6 +912,7 @@ function App() {
         }
       }, DPI_TIMEOUTS[configRef.current.dpiMethod] ?? 5000); // Mod'a uygun failsafe timeout
     } catch (e) {
+      isStartingEngine.current = false; // Lock release on start failure
       addLog(t.logEngineStartError(e), "error", {
         i18nKey: "logEngineStartError",
         i18nParams: [e],
@@ -1016,17 +1063,21 @@ function App() {
     }, 2500); // Portun serbest kalması için (SpoofDPI 1.2.1 / TIME_WAIT)
   }, [config.lanSharing, isConnected]);
 
-  // ✅ DPI modu veya chunk size değişince bağlı bağlantıyı yeniden başlat
+  // ✅ P1-FIX: DPI modu, chunk size VEYA DNS değişince bağlı bağlantıyı otomatik yeniden başlat (Stale DNS önleme)
   const isRestartingDpi = useRef(false);
   useEffect(() => {
     const chunkSize = config.httpsChunkSize ?? 4;
     if (
       prevDpiMethodRef.current === config.dpiMethod &&
-      prevChunkSizeRef.current === chunkSize
+      prevChunkSizeRef.current === chunkSize &&
+      prevSelectedDnsRef.current === config.selectedDns &&
+      prevDnsModeRef.current === config.dnsMode
     )
       return;
     prevDpiMethodRef.current = config.dpiMethod;
     prevChunkSizeRef.current = chunkSize;
+    prevSelectedDnsRef.current = config.selectedDns;
+    prevDnsModeRef.current = config.dnsMode;
 
     if (!isConnected || isRestartingDpi.current) return;
     isRestartingDpi.current = true;
@@ -1054,12 +1105,23 @@ function App() {
       setIsProcessing(true);
       startEngine(0);
     }, 2500); // Portun serbest kalması için (SpoofDPI 1.2.1 / TIME_WAIT)
-  }, [config.dpiMethod, config.httpsChunkSize, isConnected]);
+  }, [config.dpiMethod, config.httpsChunkSize, config.selectedDns, config.dnsMode, isConnected]);
 
   useEffect(() => {
     // Initial cleanup on mount
     (async () => {
       try {
+        // P0-FIX-1: Crash/BSOD sonrası kalan proxy ayarlarını sentinel ile tespit edip temizle
+        const wasDirty = await invoke("startup_proxy_cleanup").catch((e) => {
+          console.warn("Startup proxy cleanup:", e);
+          return false;
+        });
+        if (wasDirty) {
+          addLog("⚠️ Önceki oturum düzgün kapanmamış — proxy ayarları temizlendi", "warn", {
+            i18nKey: "logDirtyShutdownRecovery",
+          });
+        }
+
         // ✅ Sorun 4: Zombi süreçleri temizle (önceki çökme/force kill sonrası kalmış olabilir)
         await invoke("kill_zombie_sidecar").catch((e) =>
           console.log("Zombi temizleme:", e)
@@ -1067,6 +1129,12 @@ function App() {
         // ✅ Sorun 1: Proxy'yi temizle (çökme sonrası kalıntı)
         await clearProxy(true);
         updateTrayTooltip("disconnected");
+
+        // P1-FIX: Auto-Connect Race Condition çözümü (Temizlik adımları tamamlandıktan SONRA bağlan)
+        if (configRef.current.autoConnect && !childProcess.current) {
+          setIsProcessing(true);
+          startEngine(8080);
+        }
       } catch (e) {
         console.error("Initial cleanup failed:", e);
       }
@@ -1248,25 +1316,24 @@ function App() {
     }
   };
 
-  // Auto-connect on mount
+  // Auto-connect on mount mantığı P1-FIX kapsamında main cleanup rutinine taşındı (Race Condition'ı önlemek için)
+  // P1-FIX: Ayarlardan manuel "İnterneti Onar" tetiklendiğinde senkronize olarak Sidecar'ı kapat ve state'i sıfırla
   useEffect(() => {
-    const shouldAutoConnect = configRef.current.autoConnect;
-    let isMounted = true;
-
-    if (shouldAutoConnect && !childProcess.current) {
-      const timeoutId = setTimeout(() => {
-        if (!childProcess.current && isMounted) {
-          setIsProcessing(true);
-          startEngine(8080);
-        }
-      }, 300); // ✅ 1000ms -> 300ms (Uygulama açılışında daha hızlı bağlan)
-
-      return () => {
-        isMounted = false;
-        clearTimeout(timeoutId);
-      };
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    const handler = () => {
+      if (childProcess.current) {
+        userIntentDisconnect.current = true;
+        childProcess.current.kill().catch(() => {});
+        childProcess.current = null;
+      }
+      setIsConnected(false);
+      setIsProcessing(false);
+      updateTrayTooltip("disconnected");
+      addLog(t.logProxyForceCleared || "Proxy manuel olarak sıfırlandı", "info");
+    };
+    
+    window.addEventListener('bypax-force-disconnect', handler);
+    return () => window.removeEventListener('bypax-force-disconnect', handler);
+  }, []);
 
   // DPI & Layout Scaling Fix
   useEffect(() => {
@@ -1477,7 +1544,7 @@ function App() {
                         fontSize: "0.85rem",
                         lineHeight: "1.4",
                       }}
-                      dangerouslySetInnerHTML={{ __html: t.adminStep }}
+                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t.adminStep, PURIFY_CONFIG) }}
                     />
                   </div>
                 </div>
@@ -1522,7 +1589,7 @@ function App() {
                       "0 4px 14px rgba(59, 130, 246, 0.3)";
                   }}
                   onClick={() =>
-                    open(URLS.tutorialHowItWorks)
+                    openUrl(URLS.tutorialHowItWorks)
                   }
                 >
                   <HelpCircle size={18} />
@@ -2015,7 +2082,7 @@ function App() {
                       }}
                     >
                       <span
-                        dangerouslySetInnerHTML={{ __html: t.modalDescPac }}
+                        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t.modalDescPac, PURIFY_CONFIG) }}
                       />
                     </p>
                     <div style={{ marginBottom: "0.75rem" }}>
@@ -2057,7 +2124,7 @@ function App() {
                       }}
                     >
                       <span
-                        dangerouslySetInnerHTML={{ __html: t.modalPacQrHint }}
+                        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t.modalPacQrHint, PURIFY_CONFIG) }}
                       />
                     </p>
                   </>
@@ -2073,7 +2140,7 @@ function App() {
                         marginBottom: "1rem",
                       }}
                     >
-                      <span dangerouslySetInnerHTML={{ __html: t.modalDesc }} />
+                      <span dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t.modalDesc, PURIFY_CONFIG) }} />
                     </p>
                     <div
                       style={{
@@ -2162,7 +2229,7 @@ function App() {
                     e.currentTarget.style.boxShadow =
                       "0 4px 14px rgba(59, 130, 246, 0.3)";
                   }}
-                  onClick={() => open(URLS.tutorialProxy)}
+                  onClick={() => openUrl(URLS.tutorialProxy)}
                 >
                   <HelpCircle size={18} />
                   {t.modalTutorial}

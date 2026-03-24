@@ -31,7 +31,7 @@ if (-not (Test-Path $spoofdpiDir)) {
 Write-Host "SpoofDPI (bypax-proxy) derleniyor..." -ForegroundColor Cyan
 Push-Location $SpoofDpiSrc
 try {
-    go build -o $OutExe ./cmd/spoofdpi
+    go build -trimpath -ldflags "-s -w" -o $OutExe ./cmd/spoofdpi
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Derleme basarisiz (go build)." -ForegroundColor Red
         exit 1
