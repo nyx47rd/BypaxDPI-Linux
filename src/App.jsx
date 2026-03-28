@@ -7,6 +7,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import { getTranslations } from "./i18n";
 import { DNS_MAP, DOH_MAP, URLS, APP, RETRY_DELAYS, DPI_TIMEOUTS } from "./constants";
+import { ISP_PROFILES, buildEngineArgs, VALID_CHUNK_SIZES, VALID_DPI_METHODS, DEFAULT_CHUNKS } from "./profiles";
 
 // Re-add missing imports
 import DOMPurify from "dompurify";
@@ -107,6 +108,11 @@ function App() {
   }, []);
 
   // Settings State
+  // ✅ İlk giriş overlay state
+  const [showFirstRunISS, setShowFirstRunISS] = useState(() => {
+    return !localStorage.getItem('bypax_first_run_done');
+  });
+
   const [config, setConfig] = useState(() => {
     const defaultSettings = {
       language: "tr",
@@ -116,8 +122,9 @@ function App() {
       dnsMode: "manual",
       selectedDns: "cloudflare",
       autoReconnect: true,
-      dpiMethod: "1", // ✅ Varsayılan: Dengeli mod (0=Turbo, 1=Dengeli, 2=Güçlü)
-      httpsChunkSize: 4,
+      dpiMethod: "1",
+      httpsChunkSize: 2,
+      ipv4Only: true,
     };
 
     const saved = localStorage.getItem("bypax_config");
@@ -132,11 +139,12 @@ function App() {
         if (typeof parsed !== 'object' || parsed === null) return defaultSettings;
         
         // P1-FIX: Load esnasında Sidecar Injection'u engellemek için tip güvenlik (Config Validation)
+        // ✅ FIX: httpsChunkSize artık 1 ve 2 değerlerini de kabul ediyor (ISS profil değerleri)
         return { 
           ...defaultSettings, 
           ...parsed,
           dpiMethod: ['0', '1', '2'].includes(String(parsed.dpiMethod)) ? String(parsed.dpiMethod) : defaultSettings.dpiMethod,
-          httpsChunkSize: [4, 8, 16, 32, 64, 128].includes(Number(parsed.httpsChunkSize)) ? Number(parsed.httpsChunkSize) : defaultSettings.httpsChunkSize,
+          httpsChunkSize: [1, 2, 4, 8, 16, 32, 64, 128].includes(Number(parsed.httpsChunkSize)) ? Number(parsed.httpsChunkSize) : defaultSettings.httpsChunkSize,
           selectedDns: typeof parsed.selectedDns === 'string' ? parsed.selectedDns : defaultSettings.selectedDns,
         };
       } catch (e) {
@@ -524,67 +532,63 @@ function App() {
 
       const listenAddr = `${bindAddr}:${port}`;
 
-      const args = [
-        "--clean", // Ev / config dosyasını yok say; sadece bizim flag'ler geçerli (timeout vs. doğru kalsın)
-        "--listen-addr",
-        listenAddr,
-        "--timeout",
-        TIMEOUT_MS.toString(),
+      const args =[
+        "--clean", 
+        "--listen-addr", listenAddr,
+        "--timeout", TIMEOUT_MS.toString(),
         "--silent",
-        "--log-level",
-        "info",
+        "--log-level", "info",
       ];
 
-      // DNS ayarı: DoH (HTTPS üzerinden) veya sistem DNS'i
-      // DoH kullanımı: ISP'lerin port 53 trafiğini yakalamasını (DNS hijacking) engeller
-      // Hiçbir DLL gerektirmez — binary'nin içinde gömülü
+      // IPv4 Zorlaması (Sende çalışan stabil yapı)
+      if (configRef.current.ipv4Only !== false) {
+        args.push("--dns-qtype", "ipv4");
+      } else {
+        args.push("--dns-qtype", "all");
+      }
+
+      // DNS ayarı
       if (currentDns === "system" || !dnsIP) {
         args.push("--dns-mode", "system");
       } else {
         const dohUrl = DOH_MAP[currentDns];
         if (dohUrl) {
-          // DoH: DNS sorguları HTTPS üzerinden → ISP yakalayamaz
           args.push("--dns-mode", "https", "--dns-https-url", dohUrl);
         } else {
-          // Fallback: Bilinmeyen sağlayıcı → UDP ile dene
           args.push("--dns-addr", `${dnsIP}:53`, "--dns-mode", "udp");
         }
       }
 
-      // ✅ Yeni 3 Katmanlı DPI Bypass Sistemi
-      // 0 = Turbo: SNI split (en hızlı, hafif DPI için)
-      // 1 = Dengeli: Chunk split BEZ disorder (hızlı + güçlü, çoğu ISP'de çalışır)
-      // 2 = Güçlü: Chunk split + disorder (en güçlü, zor ISP'ler için)
+      // ========================================================
+      // SÜRÜCÜSÜZ (PORTABLE) DPI BYPASS
+      // Sadece 'chunk' modu ile Kablonet/Superonline geçilir.
+      // ========================================================
       const dpiMethod = configRef.current.dpiMethod || "1";
+      const userChunk = [1, 2, 4, 8, 16].includes(Number(configRef.current.httpsChunkSize))
+        ? String(configRef.current.httpsChunkSize)
+        : "2";
+
+      // 🛑 Önemli: Sürücü kontrolü yap (Rust tarafındaki check_driver komutunu kullan)
+      const hasDriver = await invoke('check_driver');
+      
       if (dpiMethod === "2") {
-        // Güçlü Mod: chunk + disorder (en agresif, latency ekler)
-        const chunkSize = [4, 8, 16].includes(
-          Number(configRef.current.httpsChunkSize),
-        )
-          ? String(configRef.current.httpsChunkSize)
-          : "4";
-        args.push(
-          "--https-split-mode",
-          "chunk",
-          "--https-chunk-size",
-          chunkSize,
-          "--https-disorder",
-        );
+        const advancedBypass = configRef.current.advancedBypass !== false; // default true if driver installed
+        if (hasDriver && advancedBypass) {
+          // Sürücü var ve gelişmiş bypass açık: Fake packet ile en güçlü atlatma
+          args.push("--https-split-mode", "chunk", "--https-chunk-size", "1", "--https-fake-count", "3");
+          addLog(t.logStrongFake || "🚀 Güçlü Mod: Fake Paket (3) aktif.", "success");
+        } else {
+          // Sürücü yok veya gelişmiş bypass kapalı: Sadece Chunk 1
+          args.push("--https-split-mode", "chunk", "--https-chunk-size", "1");
+          if (!hasDriver) {
+            addLog(t.logStrongNoDriver || "⚠️ Güçlü Mod: Sürücü yok, sadece Chunk-1 aktif.", "warn");
+          } else {
+            addLog(t.logStrongChunkOnly || "🛡️ Güçlü Mod: Chunk-1 aktif.", "info");
+          }
+        }
       } else if (dpiMethod === "1") {
-        // Dengeli Mod: chunk BEZ disorder (latency eklemez, çoğu ISP'de çalışır)
-        const chunkSize = [4, 8, 16].includes(
-          Number(configRef.current.httpsChunkSize),
-        )
-          ? String(configRef.current.httpsChunkSize)
-          : "4";
-        args.push(
-          "--https-split-mode",
-          "chunk",
-          "--https-chunk-size",
-          chunkSize,
-        );
+        args.push("--https-split-mode", "chunk", "--https-chunk-size", userChunk);
       } else {
-        // Turbo Mod (0): sadece SNI split — en düşük gecikme
         args.push("--https-split-mode", "sni");
       }
 
@@ -595,7 +599,7 @@ function App() {
 
       // Optimized regex pattern - compiled once (regex literal / karışmasın diye string + new RegExp)
       const SKIP_PATTERN = new RegExp(
-        "\\[(?:PROXY|DNS|HTTPS|CACHE|app)]|method:\\s*CONNECT|cache (?:miss|hit)|resolving|routing|resolution took|new conn|client sent hello|shouldExploit|useSystemDns|fragmentation|conn established|writing chunked|caching \\d+ records|[a-f0-9]{8}-[a-f0-9]{8}|d88|Y88|88P|level=|ctrl \\+ c|listen_addr|dns_addr|github\\.com|spoofdpi|connection timeout",
+        "\\[(?:PROXY|DNS|HTTPS|CACHE|app)]|method:\\s*CONNECT|cache (?:miss|hit)|resolving|routing|resolution took|new conn|client sent hello|shouldExploit|useSystemDns|fragmentation|conn established|writing chunked|caching \\d+ records|[a-f0-9]{8}-[a-f0-9]{8}|d88|Y88|88P|level=|ctrl \\+ c|listen_addr|dns_addr|github\\.com|spoofdpi|connection timeout|\\[::1\\]|ipv6|AAAA|no suitable address|network is unreachable|connectex.*\\[",
         "i",
       );
       // Bağlantı kesilirken / yeniden bağlanırken SpoofDPI tüm tünelleri kapatır; her biri "error handling request" / "wsarecv ... aborted" WRN basar - kullanıcı loguna taşıma
@@ -838,6 +842,20 @@ function App() {
             hadActiveProcess; // Process çalışıyor muydu?
 
           if (shouldReconnect) {
+            // ✅ Hızlı crash tespiti: Güçlü Mod + Fake Paket crash’i ise Npcap sorunu
+            const isStrongWithFake = configRef.current.dpiMethod === '2' && configRef.current.advancedBypass !== false;
+            if (isStrongWithFake && retryCount.current >= 2) {
+              // Npcap çalışmıyor — gelişmiş bypass’ı otomatik kapat ve tekrar dene
+              addLog(t.logNpcapFallback || "⚠️ Npcap sürücüsü yanıt vermiyor. Gelişmiş bypass kapatılıp tekrar deneniyor...", "warn");
+              configRef.current = { ...configRef.current, advancedBypass: false };
+              setConfig(prev => ({ ...prev, advancedBypass: false }));
+              localStorage.setItem('bypax_config', JSON.stringify({ ...configRef.current, advancedBypass: false }));
+              retryCount.current = 0; // Reset retry — yeni modda tekrar dene
+              setIsProcessing(true);
+              attemptReconnect();
+              return;
+            }
+
             addLog(`🔄 ${t.logAutoReconnect}`, "info", {
               i18nKey: "logAutoReconnect",
             });
@@ -938,7 +956,8 @@ function App() {
   };
 
   const toggleConnection = async () => {
-    if (isProcessing) return;
+    // ✅ FIX: isProcessing VEYA restart sırasında toggle'ı engelle (race condition fix)
+    if (isProcessing || isRestartingDpi.current || isRestartingLan.current) return;
 
     if (isConnected) {
       if (configRef.current.requireConfirmation !== false) {
@@ -1065,6 +1084,7 @@ function App() {
 
   // ✅ P1-FIX: DPI modu, chunk size VEYA DNS değişince bağlı bağlantıyı otomatik yeniden başlat (Stale DNS önleme)
   const isRestartingDpi = useRef(false);
+  const [isApplyingSettings, setIsApplyingSettings] = useState(false);
   useEffect(() => {
     const chunkSize = config.httpsChunkSize ?? 4;
     if (
@@ -1081,6 +1101,7 @@ function App() {
 
     if (!isConnected || isRestartingDpi.current) return;
     isRestartingDpi.current = true;
+    setIsApplyingSettings(true);
 
     addLog(t.logDpiRestart, "warn", { i18nKey: "logDpiRestart" });
 
@@ -1102,6 +1123,7 @@ function App() {
     setTimeout(() => {
       userIntentDisconnect.current = false;
       isRestartingDpi.current = false;
+      setIsApplyingSettings(false);
       setIsProcessing(true);
       startEngine(0);
     }, 2500); // Portun serbest kalması için (SpoofDPI 1.2.1 / TIME_WAIT)
@@ -1131,7 +1153,9 @@ function App() {
         updateTrayTooltip("disconnected");
 
         // P1-FIX: Auto-Connect Race Condition çözümü (Temizlik adımları tamamlandıktan SONRA bağlan)
-        if (configRef.current.autoConnect && !childProcess.current) {
+        // ✅ İlk giriş overlay'ı açıksa auto-connect yapma — kullanıcı ISS seçsin önce
+        const isFirstRun = !localStorage.getItem('bypax_first_run_done');
+        if (configRef.current.autoConnect && !childProcess.current && !isFirstRun) {
           setIsProcessing(true);
           startEngine(8080);
         }
@@ -1627,6 +1651,157 @@ function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* İlk Giriş ISS Seçim Overlay */}
+      <AnimatePresence>
+        {isAdmin && showFirstRunISS && !showSettings && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              zIndex: 99998,
+              background: "#09090b",
+              position: "fixed",
+              top: 0, left: 0, right: 0, bottom: 0,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              textAlign: "center",
+              padding: "1.5rem",
+            }}
+          >
+            <div style={{
+              position: "absolute", top: "35%", left: "50%",
+              transform: "translate(-50%, -50%)",
+              width: "100%", height: "400px",
+              background: "radial-gradient(circle, rgba(59, 130, 246, 0.08) 0%, rgba(0,0,0,0) 60%)",
+              pointerEvents: "none", zIndex: 0,
+            }} />
+
+            <div style={{ zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", maxWidth: "420px", width: "100%" }}>
+              <img src="/bypax-logo.png" alt="BypaxDPI" style={{ width: "56px", height: "56px", marginBottom: "1rem", borderRadius: "12px", boxShadow: "0 8px 32px rgba(0, 0, 0, 0.3)" }} />
+              <h1 style={{ fontSize: "1.25rem", marginBottom: "0.5rem", color: "#fff", fontWeight: "700" }}>{t.issOverlayTitle}</h1>
+              <p style={{ color: "#a1a1aa", marginBottom: "1.25rem", lineHeight: "1.5", fontSize: "0.85rem" }}>{t.issOverlayDesc}</p>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%", marginBottom: "1.25rem" }}>
+                {ISP_PROFILES.map((isp) => {
+                  const nameKey = `iss${isp.id.charAt(0).toUpperCase() + isp.id.slice(1)}Name`;
+                  const ispName = t[nameKey] || isp.id;
+                  const isSelected = config.dpiMethod === isp.mode && Number(config.httpsChunkSize) === isp.chunk;
+                  return (
+                    <motion.div
+                      key={isp.id}
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => {
+                        updateConfig('dpiMethod', isp.mode);
+                        updateConfig('httpsChunkSize', isp.chunk);
+                      }}
+                      style={{
+                        padding: "14px 16px",
+                        borderRadius: "14px",
+                        background: isSelected ? isp.bg : "rgba(255,255,255,0.03)",
+                        border: isSelected ? `1px solid ${isp.color}40` : "1px solid rgba(255,255,255,0.06)",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "14px",
+                        transition: "all 0.2s ease",
+                      }}
+                    >
+                      <div style={{
+                        width: "40px", height: "40px", borderRadius: "12px",
+                        background: isp.bg, display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: "1.2rem", flexShrink: 0,
+                      }}>
+                        {isp.icon}
+                      </div>
+                      <div style={{ flex: 1, textAlign: "left" }}>
+                        <div style={{ color: isSelected ? isp.color : "#f8fafc", fontWeight: 600, fontSize: "0.9rem" }}>{ispName}</div>
+                        {isp.logos && isp.logos.length > 0 && (
+                          <div style={{ display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'center' }}>
+                            {isp.logos.map((logo, idx) => (
+                              <img key={idx} src={logo} alt="ISP Logo" style={{ height: '16px', opacity: 0.8, filter: 'grayscale(0.2)' }} />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{
+                        width: "20px", height: "20px", borderRadius: "50%",
+                        border: isSelected ? `2px solid ${isp.color}` : "2px solid rgba(255,255,255,0.15)",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        transition: "all 0.2s ease",
+                      }}>
+                        {isSelected && <div style={{ width: "10px", height: "10px", borderRadius: "50%", background: isp.color }} />}
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+
+              <button
+                onClick={() => {
+                  localStorage.setItem('bypax_first_run_done', 'true');
+                  setShowFirstRunISS(false);
+                  // Otomatik bağlan
+                  if (!isConnected && !isProcessing) {
+                    retryCount.current = 0;
+                    userIntentDisconnect.current = false;
+                    setIsProcessing(true);
+                    startEngine(8080);
+                  }
+                }}
+                style={{
+                  width: "100%",
+                  background: "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)",
+                  color: "white",
+                  padding: "0.85rem",
+                  border: "none",
+                  borderRadius: "12px",
+                  fontSize: "0.95rem",
+                  fontWeight: "700",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "8px",
+                  boxShadow: "0 4px 14px rgba(59, 130, 246, 0.3)",
+                  marginBottom: "0.75rem",
+                  transition: "all 0.2s ease",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.boxShadow = "0 6px 20px rgba(59, 130, 246, 0.4)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 4px 14px rgba(59, 130, 246, 0.3)"; }}
+              >
+                <Power size={18} />
+                {t.issOverlayApply}
+              </button>
+
+              <button
+                onClick={() => {
+                  localStorage.setItem('bypax_first_run_done', 'true');
+                  setShowFirstRunISS(false);
+                }}
+                style={{
+                  background: "transparent",
+                  color: "#71717a",
+                  border: "none",
+                  fontSize: "0.85rem",
+                  cursor: "pointer",
+                  padding: "0.5rem",
+                  transition: "color 0.2s",
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.color = "#a1a1aa"}
+                onMouseLeave={(e) => e.currentTarget.style.color = "#71717a"}
+              >
+                {t.issOverlaySkip}
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header */}
       <header className="app-header">
         <div className="brand">
@@ -1783,17 +1958,19 @@ function App() {
         <button
           className={`main-btn ${isConnected ? "disconnect" : "connect"} ${isProcessing ? "processing" : ""}`}
           onClick={toggleConnection}
-          disabled={isProcessing}
+          disabled={isProcessing || isRestartingDpi.current || isRestartingLan.current}
         >
           <Power size={22} strokeWidth={2.5} />
           <span>
-            {isProcessing
-              ? isConnected
-                ? t.btnDisconnecting
-                : t.btnConnecting
-              : isConnected
-                ? t.btnDisconnect
-                : t.btnConnect}
+            {isApplyingSettings
+              ? t.btnApplyingSettings
+              : isProcessing
+                ? isConnected
+                  ? t.btnDisconnecting
+                  : t.btnConnecting
+                : isConnected
+                  ? t.btnDisconnect
+                  : t.btnConnect}
           </span>
         </button>
       </div>

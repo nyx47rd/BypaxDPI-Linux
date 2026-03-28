@@ -19,6 +19,7 @@ const translations = {
     btnConnect: 'BAĞLAN',
     btnDisconnect: 'BAĞLANTIYI KES',
     btnConnecting: 'BAĞLANIYOR...',
+    btnApplyingSettings: 'AYAR UYGULANIYOR...',
     btnDisconnecting: 'KESİLİYOR...',
     btnConnectDevices: 'Diğer Cihazları Bağla',
 
@@ -180,6 +181,64 @@ const translations = {
     dnsCheckSpeed: 'DNS Ping Test',
     dnsChecking: 'Ölçülüyor...',
 
+    // Section: Driver
+    driverStatusInstalled: 'Gelişmiş Filtreleme Aktif',
+    driverStatusMissing: 'Bypass çalışmazsa gelişmiş özellikleri açın',
+    driverInstallBtn: 'SÜRÜCÜYÜ KUR (ÖNERİLEN)',
+    driverIspWarning: 'Eğer bağlantı sorunu yaşıyorsanız, sürücü yükleyerek çok daha gelişmiş DPI aşma özelliklerini açabilirsiniz.',
+
+    // ISS Overlay (İlk Giriş)
+    issOverlayTitle: 'İnternet Sağlayıcınızı Seçin',
+    issOverlayDesc: 'En iyi performans için sağlayıcınıza özel ayarları otomatik uygulayalım.',
+    issOverlayApply: 'UYGULA VE BAĞLAN',
+    issOverlaySkip: 'Atla',
+    issProfileActive: 'Profil Aktif',
+    issProfileSee: 'Tavsiye edilen ayarı gör',
+    issApplyBtn: 'Ayarları Otomatik Uygula',
+    issAppliedMsg: 'Bu ayar şu an kullanılıyor',
+
+    // ISS Rehberi (Settings)
+    issGuideTitle: 'İNTERNET SAĞLAYICI REHBERİ',
+    issLightName: 'TurkNet / Millenicom',
+    issLightDesc: 'Hafif filtreleme yaparlar. Turbo Mod sayesinde oyunlarda ping artışı veya hız kaybı yaşamazsınız.',
+    issMidName: 'Türk Telekom / Vodafone',
+    issMidDesc: 'Standart engellemeler yaparlar. İnternetinizi yavaşlatmadan paketleri bölen Dengeli Mod en iyisidir.',
+    issHeavyName: 'Kablonet / Superonline',
+    issHeavyDesc: 'Zorlu ve akıllı DPI cihazları kullanırlar. Sisteme sahte paketler göndererek kandıran Güçlü Mod gerektirir.',
+    issOtherName: 'Diğer / Bilmiyorum',
+    issOtherDesc: 'Genel kullanım için dengeli bir ayar. Çoğu sağlayıcıda sorunsuz çalışır.',
+
+    // Bypass Ayarları
+    sectionBypass: 'DETAYLI BYPASS AYARLARI',
+    modeTurboName: 'Turbo Mod',
+    modeTurboDesc: 'En düşük gecikme. Hafif filtreleri anında aşar.',
+    modeBalancedName: 'Dengeli Mod',
+    modeBalancedDesc: 'Hızlı ve stabil. Standart filtreleri aşar.',
+    modeStrongName: 'Güçlü Mod',
+    modeStrongDesc: 'Zorlu DPI\'ları sahte paketlerle kandırır.',
+
+    // Ekstra Ağ
+    sectionExtraNetwork: 'EKSTRA AĞ AYARLARI',
+    ipv4ForceTitle: 'IPv4\'e Zorla (Önerilen)',
+    ipv4ForceDesc: 'Sonsuz yükleme ve Zaman Aşımı (Timeout) hatalarını engeller.',
+
+    // Gelişmiş (Npcap)
+    sectionAdvancedNpcap: 'GELİŞMİŞ AYARLAR',
+    advancedNpcapDesc: 'Ağır DPI önlemleri olan sağlayıcılar için (Kablonet, Superonline vb.) gelişmiş paket manipülasyonu gerektirir.',
+    advancedNpcapInstalled: 'Npcap Kurulu — Gelişmiş özellikler aktif',
+    advancedNpcapMissing: 'Npcap kurulu değil — Güçlü mod kısıtlı çalışır',
+    advancedNpcapInstallBtn: 'NPCAP SÜRÜCÜSÜNÜ KUR',
+    advancedNpcapWhy: 'Npcap, ağ paketlerine düşük seviyede erişim sağlar. Bu sayede sahte paket (fake packet) gönderme gibi gelişmiş DPI aşma teknikleri kullanılabilir.',
+    advancedFeaturesToggle: 'Gelişmiş Bypass',
+    advancedFeaturesToggleDesc: 'Sahte paket gönderme ve gelişmiş DPI aşma tekniklerini aktif eder.',
+    npcapRestartWarning: 'Npcap\'in çalışabilmesi için bilgisayarınızı yeniden başlatmanız gerekiyor.',
+    logStrongFake: '🚀 Güçlü Mod: Fake Paket (3) aktif.',
+    logStrongNoDriver: '⚠️ Güçlü Mod: Sürücü yok, sadece Chunk-1 aktif.',
+    logStrongChunkOnly: '🛡️ Güçlü Mod: Chunk-1 aktif.',
+    logNpcapFallback: '⚠️ Npcap sürücüsü yanıt vermiyor. Gelişmiş bypass kapatılıp tekrar deneniyor...',
+    advancedNpcapHint: 'Daha güçlü bypass için Npcap sürücüsünü kurun',
+
+
     // Section: Troubleshooting
     sectionTroubleshoot: 'SORUN GİDERME',
     fixInternet: 'İnternet Bağlantısını Onar',
@@ -235,6 +294,7 @@ const translations = {
     btnConnect: 'CONNECT',
     btnDisconnect: 'DISCONNECT',
     btnConnecting: 'CONNECTING...',
+    btnApplyingSettings: 'APPLYING SETTINGS...',
     btnDisconnecting: 'DISCONNECTING...',
     btnConnectDevices: 'Connect Other Devices',
 
@@ -395,6 +455,64 @@ const translations = {
     dnsOpenDnsDesc: 'Powered by Cisco',
     dnsCheckSpeed: 'DNS Ping Test',
     dnsChecking: 'Measuring...',
+
+    // Section: Driver
+    driverStatusInstalled: 'Advanced Filtering Active',
+    driverStatusMissing: 'Unlock advanced features if bypass fails',
+    driverInstallBtn: 'INSTALL DRIVER (RECOMMENDED)',
+    driverIspWarning: 'If you have connection issues, you can unlock much more advanced DPI bypass features by installing the driver.',
+
+    // ISS Overlay (First Run)
+    issOverlayTitle: 'Select Your Internet Provider',
+    issOverlayDesc: 'Let us auto-apply the best settings for your ISP.',
+    issOverlayApply: 'APPLY & CONNECT',
+    issOverlaySkip: 'Skip',
+    issProfileActive: 'Profile Active',
+    issProfileSee: 'See recommended settings',
+    issApplyBtn: 'Auto Apply Settings',
+    issAppliedMsg: 'This setting is currently in use',
+
+    // ISS Guide (Settings)
+    issGuideTitle: 'ISP GUIDE',
+    issLightName: 'TurkNet / Millenicom',
+    issLightDesc: 'Light filtering. Turbo Mode ensures no ping increase or speed loss in games.',
+    issMidName: 'Türk Telekom / Vodafone',
+    issMidDesc: 'Standard blocking. Balanced Mode splits packets without slowing your internet.',
+    issHeavyName: 'Kablonet / Superonline',
+    issHeavyDesc: 'Advanced DPI devices. Strong Mode sends fake packets to bypass them.',
+    issOtherName: 'Other / Not Sure',
+    issOtherDesc: 'A balanced setting for general use. Works reliably with most providers.',
+
+    // Bypass Settings
+    sectionBypass: 'BYPASS SETTINGS',
+    modeTurboName: 'Turbo Mode',
+    modeTurboDesc: 'Lowest latency. Bypasses light filters instantly.',
+    modeBalancedName: 'Balanced Mode',
+    modeBalancedDesc: 'Fast and stable. Bypasses standard filters.',
+    modeStrongName: 'Strong Mode',
+    modeStrongDesc: 'Bypasses tough DPI with fake packets.',
+
+    // Extra Network
+    sectionExtraNetwork: 'EXTRA NETWORK SETTINGS',
+    ipv4ForceTitle: 'Force IPv4 (Recommended)',
+    ipv4ForceDesc: 'Prevents infinite loading and timeout errors.',
+
+    // Advanced (Npcap)
+    sectionAdvancedNpcap: 'ADVANCED SETTINGS',
+    advancedNpcapDesc: 'ISPs with heavy DPI measures (Kablonet, Superonline etc.) require advanced packet manipulation.',
+    advancedNpcapInstalled: 'Npcap Installed — Advanced features active',
+    advancedNpcapMissing: 'Npcap not installed — Strong mode limited',
+    advancedNpcapInstallBtn: 'INSTALL NPCAP DRIVER',
+    advancedNpcapWhy: 'Npcap provides low-level access to network packets. This enables advanced DPI bypass techniques like fake packet injection.',
+    advancedFeaturesToggle: 'Advanced Bypass',
+    advancedFeaturesToggleDesc: 'Enables fake packet injection and advanced DPI bypass techniques.',
+    npcapRestartWarning: 'You need to restart your computer for Npcap to work.',
+    logStrongFake: '🚀 Strong Mode: Fake Packet (3) active.',
+    logStrongNoDriver: '⚠️ Strong Mode: No driver, Chunk-1 only.',
+    logStrongChunkOnly: '🛡️ Strong Mode: Chunk-1 active.',
+    logNpcapFallback: '⚠️ Npcap driver not responding. Disabling advanced bypass and retrying...',
+    advancedNpcapHint: 'Install Npcap driver for stronger bypass',
+
 
     // Section: Troubleshooting
     sectionTroubleshoot: 'TROUBLESHOOTING',

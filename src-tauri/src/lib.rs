@@ -1,11 +1,11 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use local_ip_address::list_afinet_netifas;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{IpAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use tauri::Emitter;
@@ -16,8 +16,80 @@ use tauri::Manager;
 // P0-FIX-2: Orijinal proxy ayarları yedekleme / geri yükleme
 // ═══════════════════════════════════════════════════════════════════
 
-const REG_INTERNET_SETTINGS: &str =
-    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+#[cfg(target_os = "windows")]
+mod registry {
+    use winreg::enums::*;
+    use winreg::RegKey;
+
+    const INTERNET_SETTINGS: &str = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+
+    pub fn read_value_string(name: &str) -> Option<String> {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let key = hkcu.open_subkey(INTERNET_SETTINGS).ok()?;
+        let val: String = key.get_value(name).ok()?;
+        Some(val)
+    }
+
+    pub fn read_value_dword(name: &str) -> Option<u32> {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let key = hkcu.open_subkey(INTERNET_SETTINGS).ok()?;
+        key.get_value(name).ok()
+    }
+
+    pub fn set_proxy(port: u16) -> Result<(), String> {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (key, _) = hkcu
+            .create_subkey(INTERNET_SETTINGS)
+            .map_err(|e| format!("Registry açılamadı: {}", e))?;
+
+        key.set_value("ProxyServer", &format!("127.0.0.1:{}", port))
+            .map_err(|e| format!("ProxyServer: {}", e))?;
+        key.set_value("ProxyEnable", &1u32)
+            .map_err(|e| format!("ProxyEnable: {}", e))?;
+        key.set_value("ProxyOverride", &"<local>")
+            .map_err(|e| format!("ProxyOverride: {}", e))?;
+        Ok(())
+    }
+
+    pub fn clear_proxy() -> Result<(), String> {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (key, _) = hkcu
+            .create_subkey(INTERNET_SETTINGS)
+            .map_err(|e| format!("Registry açılamadı: {}", e))?;
+
+        key.set_value("ProxyEnable", &0u32)
+            .map_err(|e| format!("ProxyEnable: {}", e))?;
+        let _ = key.delete_value("ProxyServer");
+        let _ = key.delete_value("ProxyOverride");
+        Ok(())
+    }
+
+    pub fn restore_proxy(
+        server: &str,
+        enable: u32,
+        override_val: Option<&str>,
+    ) -> Result<(), String> {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (key, _) = hkcu
+            .create_subkey(INTERNET_SETTINGS)
+            .map_err(|e| format!("Registry açılamadı: {}", e))?;
+
+        key.set_value("ProxyServer", &server)
+            .map_err(|e| format!("ProxyServer: {}", e))?;
+        key.set_value("ProxyEnable", &enable)
+            .map_err(|e| format!("ProxyEnable: {}", e))?;
+        if let Some(ov) = override_val {
+            key.set_value("ProxyOverride", &ov)
+                .map_err(|e| format!("ProxyOverride: {}", e))?;
+        }
+        Ok(())
+    }
+
+    pub fn can_access() -> bool {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        hkcu.open_subkey(INTERNET_SETTINGS).is_ok()
+    }
+}
 
 /// Sentinel dosya yolu — proxy aktifken var, kapanınca silinir.
 /// Crash/BSOD/force-kill sonrası hâlâ duruyorsa → dirty shutdown algılanır.
@@ -28,7 +100,7 @@ fn sentinel_path() -> std::path::PathBuf {
 /// Orijinal proxy ayarlarını tutan yapı
 #[derive(Debug, Clone, Default)]
 struct OriginalProxySettings {
-    proxy_enable: Option<String>,
+    proxy_enable: Option<u32>,
     proxy_server: Option<String>,
     proxy_override: Option<String>,
 }
@@ -39,46 +111,13 @@ fn original_proxy_store() -> &'static Mutex<Option<OriginalProxySettings>> {
     STORE.get_or_init(|| Mutex::new(None))
 }
 
-/// Registry'den tek bir değer okur (reg query)
-#[cfg(target_os = "windows")]
-fn read_reg_value(value_name: &str) -> Option<String> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-    let output = std::process::Command::new("reg")
-        .args(["query", REG_INTERNET_SETTINGS, "/v", value_name])
-        .creation_flags(CREATE_NO_WINDOW)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // "REG_SZ    corp-proxy:3128" veya "REG_DWORD    0x1" formatını parse et
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if trimmed.contains(value_name) {
-            // Format: "    ProxyServer    REG_SZ    corp-proxy:3128"
-            let parts: Vec<&str> = trimmed.split_whitespace().collect();
-            if parts.len() >= 3 {
-                return Some(parts[2..].join(" "));
-            }
-        }
-    }
-    None
-}
-
 /// Proxy ayarlarını set etmeden ÖNCE mevcut değerleri yedekler
 #[cfg(target_os = "windows")]
 fn backup_proxy_settings() {
     let settings = OriginalProxySettings {
-        proxy_enable: read_reg_value("ProxyEnable"),
-        proxy_server: read_reg_value("ProxyServer"),
-        proxy_override: read_reg_value("ProxyOverride"),
+        proxy_enable: registry::read_value_dword("ProxyEnable"),
+        proxy_server: registry::read_value_string("ProxyServer"),
+        proxy_override: registry::read_value_string("ProxyOverride"),
     };
 
     if let Ok(mut guard) = original_proxy_store().lock() {
@@ -95,9 +134,6 @@ fn backup_proxy_settings() {
 /// Eğer orijinal ayarlarda proxy yoksa → sil (mevcut davranış)
 #[cfg(target_os = "windows")]
 fn restore_proxy_settings() -> bool {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
     let original = match original_proxy_store().lock() {
         Ok(guard) => guard.clone(),
         Err(poisoned) => {
@@ -111,73 +147,10 @@ fn restore_proxy_settings() -> bool {
         if let Some(ref server) = orig.proxy_server {
             if !server.is_empty() && !server.starts_with("127.0.0.1:") {
                 eprintln!("[PROXY-RESTORE] Kurumsal proxy geri yükleniyor: {}", server);
-                let _ = std::process::Command::new("reg")
-                    .args([
-                        "add",
-                        REG_INTERNET_SETTINGS,
-                        "/v",
-                        "ProxyServer",
-                        "/t",
-                        "REG_SZ",
-                        "/d",
-                        server,
-                        "/f",
-                    ])
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status();
 
-                // Orijinal ProxyEnable değerini geri yükle
-                let enable_val = orig
-                    .proxy_enable
-                    .as_deref()
-                    .and_then(|v| {
-                        if v.contains("0x1") || v == "1" {
-                            Some("1")
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or("0");
-                let _ = std::process::Command::new("reg")
-                    .args([
-                        "add",
-                        REG_INTERNET_SETTINGS,
-                        "/v",
-                        "ProxyEnable",
-                        "/t",
-                        "REG_DWORD",
-                        "/d",
-                        enable_val,
-                        "/f",
-                    ])
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status();
+                let enable_val = orig.proxy_enable.unwrap_or(0);
+                let _ = registry::restore_proxy(server, enable_val, orig.proxy_override.as_deref());
 
-                // Orijinal ProxyOverride geri yükle
-                if let Some(ref ov) = orig.proxy_override {
-                    if !ov.is_empty() {
-                        let _ = std::process::Command::new("reg")
-                            .args([
-                                "add",
-                                REG_INTERNET_SETTINGS,
-                                "/v",
-                                "ProxyOverride",
-                                "/t",
-                                "REG_SZ",
-                                "/d",
-                                ov,
-                                "/f",
-                            ])
-                            .creation_flags(CREATE_NO_WINDOW)
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status();
-                    }
-                }
                 return true; // Geri yükleme yapıldı, silme işlemine geçme
             }
         }
@@ -251,11 +224,27 @@ fn get_safe_lan_ip() -> String {
     "127.0.0.1".to_string()
 }
 
+/// Basit string hash — PAC body değişti mi kontrolü için
+fn simple_hash(s: &str) -> u64 {
+    let mut h: u64 = 5381;
+    for b in s.bytes() {
+        h = h.wrapping_mul(33).wrapping_add(b as u64);
+    }
+    h
+}
+
+/// Ön-derlenmiş PAC HTTP yanıtı — her istekte format! çağırmaz
+pub struct PacCache {
+    pub pac_response: Vec<u8>,
+    pub body_hash: u64,
+}
+
 /// PAC sunucusu durumu: thread handle + shutdown flag + dinamik body
 pub struct PacServerState {
     pub join_handle: Mutex<Option<thread::JoinHandle<()>>>,
     pub shutdown: Arc<AtomicBool>,
     pub pac_body: Arc<Mutex<String>>,
+    pub pac_cache: Arc<Mutex<PacCache>>,
     pub pac_port: Mutex<u16>,
     pub pac_url: Mutex<String>,
 }
@@ -266,6 +255,10 @@ impl Default for PacServerState {
             join_handle: Mutex::new(None),
             shutdown: Arc::new(AtomicBool::new(false)),
             pac_body: Arc::new(Mutex::new(make_pac_direct_body())),
+            pac_cache: Arc::new(Mutex::new(PacCache {
+                pac_response: Vec::new(),
+                body_hash: 0,
+            })),
             pac_port: Mutex::new(0),
             pac_url: Mutex::new(String::new()),
         }
@@ -292,21 +285,22 @@ fn make_pac_body(lan_ip: &str, proxy_port: u16) -> String {
     let proxy = format!("{}:{}", lan_ip, proxy_port);
     format!(
         r#"function FindProxyForURL(url, host) {{
-    if (isPlainHostName(host) || host === "localhost" || host.indexOf("127.") === 0 ||
-        shExpMatch(host, "*.local"))
+    // Localhost & plain hostnames → DIRECT (anında, DNS yok)
+    if (isPlainHostName(host) ||
+        host === "localhost" ||
+        shExpMatch(host, "127.*") ||
+        shExpMatch(host, "10.*") ||
+        shExpMatch(host, "192.168.*") ||
+        shExpMatch(host, "172.16.*") || shExpMatch(host, "172.17.*") ||
+        shExpMatch(host, "172.18.*") || shExpMatch(host, "172.19.*") ||
+        shExpMatch(host, "172.2?.*") || shExpMatch(host, "172.30.*") ||
+        shExpMatch(host, "172.31.*") ||
+        shExpMatch(host, "*.local") ||
+        shExpMatch(host, "*.localhost") ||
+        shExpMatch(host, "*.internal"))
         return "DIRECT";
-    try {{
-        var resolved = dnsResolve(host);
-        if (resolved &&
-            (isInNet(resolved, "192.168.0.0", "255.255.0.0") ||
-             isInNet(resolved, "10.0.0.0", "255.0.0.0") ||
-             isInNet(resolved, "172.16.0.0", "255.240.0.0") ||
-             isInNet(resolved, "127.0.0.0", "255.0.0.0")))
-            return "DIRECT";
-    }} catch(e) {{}}
     return "PROXY {}; DIRECT";
-}}
-"#,
+}}"#,
         proxy
     )
 }
@@ -516,18 +510,35 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn handle_pac_request(mut stream: TcpStream, pac_body: &Arc<Mutex<String>>, pac_url: &str) {
+fn handle_pac_request(
+    stream: TcpStream,
+    pac_body: &Arc<Mutex<String>>,
+    pac_cache: &Arc<Mutex<PacCache>>,
+    pac_url: &str,
+) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-    let mut buf = [0u8; 512];
-    let first_line = match stream.read(&mut buf) {
-        Ok(n) if n > 0 => std::str::from_utf8(&buf[..n])
-            .ok()
-            .and_then(|s| s.lines().next())
-            .unwrap_or_default()
-            .to_string(),
-        _ => String::new(),
-    };
+
+    let mut reader = std::io::BufReader::new(stream);
+    let mut first_line = String::new();
+
+    if std::io::BufRead::read_line(&mut reader, &mut first_line).is_err() || first_line.is_empty() {
+        return;
+    }
+
+    // TCP RST problemini çözmek için request header'larının TAMI tüketilmelidir.
+    // Sadece 512 bytelık kısmı okunup soket kapatılırsa OS bağlantıyı "Connection Reset" ile koparır
+    // Bu yüzden telefon tarayıcısında QR kodu okutulan setup sayfası hiç açılmamış gözüküyordu.
+    let mut discard = String::new();
+    while let Ok(n) = std::io::BufRead::read_line(&mut reader, &mut discard) {
+        if n <= 2 {
+            break;
+        } // Boş satır (Header sonu: \r\n veya \n)
+        discard.clear();
+    }
+
+    let mut stream = reader.into_inner();
+
     let path = first_line
         .split_whitespace()
         .nth(1)
@@ -549,21 +560,44 @@ fn handle_pac_request(mut stream: TcpStream, pac_body: &Arc<Mutex<String>>, pac_
         return;
     }
 
-    // PAC body'yi lock'tan oku — bağlantı durumuna göre dinamik olarak değişir
-    let current_pac_body = pac_body
-        .lock()
-        .map(|b| b.clone())
-        .unwrap_or_else(|_| make_pac_direct_body());
+    if is_get && path == "/proxy.pac" {
+        // Body'yi bir kez oku — hem hash hem içerik için kullan (TOCTOU ve deadlock riski önlenir)
+        let current_body = pac_body
+            .lock()
+            .map(|b| b.clone())
+            .unwrap_or_else(|_| make_pac_direct_body());
+        let current_hash = simple_hash(&current_body);
 
-    let (status, content_type, body) = if !is_get {
-        ("404 Not Found", "text/plain", String::new())
-    } else if path == "/proxy.pac" {
-        (
-            "200 OK",
-            "application/x-ns-proxy-autoconfig",
-            current_pac_body,
-        )
-    } else if path == "/" || path.is_empty() {
+        if let Ok(mut cache) = pac_cache.lock() {
+            if cache.body_hash != current_hash || cache.pac_response.is_empty() {
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/x-ns-proxy-autoconfig\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: max-age=300\r\nContent-Length: {}\r\n\r\n{}",
+                    current_body.len(),
+                    current_body
+                );
+                cache.pac_response = response.into_bytes();
+                cache.body_hash = current_hash;
+            }
+            let _ = stream.write_all(&cache.pac_response);
+        } else {
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/x-ns-proxy-autoconfig\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: max-age=300\r\nContent-Length: {}\r\n\r\n{}",
+                current_body.len(),
+                current_body
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+        let _ = stream.flush();
+        return;
+    }
+
+    if !is_get {
+        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+        let _ = stream.flush();
+        return;
+    }
+
+    let (status, content_type, body) = if path == "/" || path.is_empty() {
         (
             "200 OK",
             "text/html; charset=utf-8",
@@ -573,9 +607,8 @@ fn handle_pac_request(mut stream: TcpStream, pac_body: &Arc<Mutex<String>>, pac_
         ("404 Not Found", "text/plain", String::new())
     };
 
-    // Cache-Control: no-cache ekle — cihazlar her seferinde güncel PAC'ı alsın
     let response = format!(
-        "HTTP/1.1 {}\r\nContent-Type: {}\r\nConnection: close\r\nCache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\nContent-Length: {}\r\n\r\n{}",
+        "HTTP/1.1 {}\r\nContent-Type: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: max-age=300\r\nContent-Length: {}\r\n\r\n{}",
         status,
         content_type,
         body.len(),
@@ -592,6 +625,77 @@ struct PacResponse {
 
 /// P1-FIX: PAC sunucusu eşzamanlı bağlantı limiti
 const MAX_PAC_CONNECTIONS: u32 = 50;
+
+#[cfg(target_os = "windows")]
+fn manage_firewall_rules(enable: bool, proxy_port: u16, pac_port: u16) {
+    std::thread::spawn(move || {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        // Önce mevcut kuralları temizle
+        let _ = std::process::Command::new("netsh")
+            .args(&[
+                "advfirewall",
+                "firewall",
+                "delete",
+                "rule",
+                "name=BypaxDPI_Proxy",
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        let _ = std::process::Command::new("netsh")
+            .args(&[
+                "advfirewall",
+                "firewall",
+                "delete",
+                "rule",
+                "name=BypaxDPI_PAC",
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        if enable {
+            let _ = std::process::Command::new("netsh")
+                .args(&[
+                    "advfirewall",
+                    "firewall",
+                    "add",
+                    "rule",
+                    "name=BypaxDPI_Proxy",
+                    "dir=in",
+                    "action=allow",
+                    "protocol=TCP",
+                    &format!("localport={}", proxy_port),
+                ])
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+
+            let _ = std::process::Command::new("netsh")
+                .args(&[
+                    "advfirewall",
+                    "firewall",
+                    "add",
+                    "rule",
+                    "name=BypaxDPI_PAC",
+                    "dir=in",
+                    "action=allow",
+                    "protocol=TCP",
+                    &format!("localport={}", pac_port),
+                ])
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    });
+}
 
 #[tauri::command]
 fn start_pac_server(
@@ -652,6 +756,9 @@ fn start_pac_server(
     let listener = listener_result.unwrap();
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
 
+    #[cfg(target_os = "windows")]
+    manage_firewall_rules(true, proxy_port, found_port);
+
     let pac_url = format!("http://{}:{}/proxy.pac", lan_ip, found_port);
 
     // State'e kaydet
@@ -665,6 +772,7 @@ fn start_pac_server(
     let shutdown = Arc::clone(&state.shutdown);
     shutdown.store(false, Ordering::Relaxed);
     let pac_body_arc = Arc::clone(&state.pac_body);
+    let pac_cache_arc = Arc::clone(&state.pac_cache);
     let pac_url_for_thread = pac_url.clone();
 
     // P1-FIX: Thread limiti için atomik sayaç
@@ -684,18 +792,20 @@ fn start_pac_server(
                     active_connections.fetch_add(1, Ordering::Relaxed);
 
                     let body = Arc::clone(&pac_body_arc);
+                    let cache = Arc::clone(&pac_cache_arc);
                     let url = pac_url_for_thread.clone();
                     let conn_counter = Arc::clone(&active_connections);
                     // Her bağlantıyı ayrı thread'de işle
                     thread::spawn(move || {
+                        let _ = stream.set_nodelay(true);
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                         let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-                        handle_pac_request(stream, &body, &url);
+                        handle_pac_request(stream, &body, &cache, &url);
                         conn_counter.fetch_sub(1, Ordering::Relaxed);
                     });
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(100));
+                    thread::sleep(Duration::from_millis(5));
                 }
                 Err(_) => {}
             }
@@ -717,6 +827,10 @@ fn stop_pac_server(state: tauri::State<'_, PacServerState>) -> Result<(), String
     if let Ok(mut body) = state.pac_body.lock() {
         *body = make_pac_direct_body();
     }
+
+    #[cfg(target_os = "windows")]
+    manage_firewall_rules(false, 0, 0);
+
     Ok(())
 }
 
@@ -731,6 +845,9 @@ fn force_stop_pac_server(state: &PacServerState) {
     if let Ok(mut guard) = state.join_handle.lock() {
         let _ = guard.take();
     }
+
+    #[cfg(target_os = "windows")]
+    manage_firewall_rules(false, 0, 0);
 }
 
 #[derive(serde::Serialize)]
@@ -812,42 +929,7 @@ fn clear_system_proxy() -> Result<(), String> {
         let has_original = restore_proxy_settings();
 
         if !has_original {
-            // 1. ProxyEnable = 0
-            let status = Command::new("reg")
-                .args([
-                    "add",
-                    REG_INTERNET_SETTINGS,
-                    "/v",
-                    "ProxyEnable",
-                    "/t",
-                    "REG_DWORD",
-                    "/d",
-                    "0",
-                    "/f",
-                ])
-                .creation_flags(CREATE_NO_WINDOW)
-                .status()
-                .map_err(|e| e.to_string())?;
-
-            if !status.success() {
-                return Err("Failed to clear proxy via registry".to_string());
-            }
-
-            // 2. ProxyServer değerini tamamen sil (reg delete)
-            let _ = Command::new("reg")
-                .args(["delete", REG_INTERNET_SETTINGS, "/v", "ProxyServer", "/f"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-
-            // 3. ProxyOverride değerini de temizle (reg delete)
-            let _ = Command::new("reg")
-                .args(["delete", REG_INTERNET_SETTINGS, "/v", "ProxyOverride", "/f"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
+            let _ = registry::clear_proxy();
         }
 
         // 4. DNS Önbelleğini Temizle (Race condition / DNS sorunlarını önler)
@@ -856,10 +938,12 @@ fn clear_system_proxy() -> Result<(), String> {
             .creation_flags(CREATE_NO_WINDOW)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status();
+            .spawn();
 
         // 5. Notify browsers about the change
         notify_proxy_change();
+
+        manage_firewall_rules(false, 0, 0);
     }
 
     // P0-FIX-1: Sentinel dosyasını sil — proxy artık aktif değil
@@ -879,7 +963,7 @@ fn clear_system_proxy() -> Result<(), String> {
 fn notify_proxy_change() {
     use std::ptr::null_mut;
     use winapi::um::wininet::{
-        INTERNET_OPTION_REFRESH, INTERNET_OPTION_SETTINGS_CHANGED, InternetSetOptionW,
+        InternetSetOptionW, INTERNET_OPTION_REFRESH, INTERNET_OPTION_SETTINGS_CHANGED,
     };
 
     unsafe {
@@ -893,27 +977,14 @@ fn notify_proxy_change() {
 #[tauri::command]
 fn set_system_proxy(port: u16) -> Result<(), String> {
     let _guard = acquire_proxy_lock(); // P0-FIX-3: Poisoned mutex recovery
-    // ✅ Port aralığı validasyonu
+                                       // ✅ Port aralığı validasyonu
     if port < 1024 {
         return Err("Geçersiz port numarası (1024-65535 arası olmalı)".to_string());
     }
 
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        use std::process::Command;
-
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let proxy_address = format!("127.0.0.1:{}", port);
-
-        // ✅ Registry yazma iznini kontrol et
-        let test_status = Command::new("reg")
-            .args(["query", REG_INTERNET_SETTINGS])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .map_err(|e| format!("Registry erişim hatası: {e}"))?;
-
-        if !test_status.status.success() {
+        if !registry::can_access() {
             return Err(
                 "Registry yazma izni yok. Uygulamayı yönetici olarak çalıştırın.".to_string(),
             );
@@ -922,75 +993,11 @@ fn set_system_proxy(port: u16) -> Result<(), String> {
         // P0-FIX-2: Proxy ayarlamadan ÖNCE mevcut ayarları yedekle
         backup_proxy_settings();
 
-        // ✅ ProxyOverride ekle (localhost bypass)
-        let _ = Command::new("reg")
-            .args([
-                "add",
-                REG_INTERNET_SETTINGS,
-                "/v",
-                "ProxyOverride",
-                "/t",
-                "REG_SZ",
-                "/d",
-                "<local>",
-                "/f",
-            ])
-            .creation_flags(CREATE_NO_WINDOW)
-            .status();
-
-        // 1. Set Proxy Server Address
-        let status_server = Command::new("reg")
-            .args([
-                "add",
-                REG_INTERNET_SETTINGS,
-                "/v",
-                "ProxyServer",
-                "/t",
-                "REG_SZ",
-                "/d",
-                &proxy_address,
-                "/f",
-            ])
-            .creation_flags(CREATE_NO_WINDOW)
-            .status()
-            .map_err(|e| format!("ProxyServer ayarlanamadı: {e}"))?;
-
-        // 2. Enable Proxy
-        let status_enable = Command::new("reg")
-            .args([
-                "add",
-                REG_INTERNET_SETTINGS,
-                "/v",
-                "ProxyEnable",
-                "/t",
-                "REG_DWORD",
-                "/d",
-                "1",
-                "/f",
-            ])
-            .creation_flags(CREATE_NO_WINDOW)
-            .status()
-            .map_err(|e| format!("ProxyEnable ayarlanamadı: {e}"))?;
-
-        if !status_server.success() || !status_enable.success() {
-            // ✅ Rollback yap
-            let _ = Command::new("reg")
-                .args([
-                    "add",
-                    REG_INTERNET_SETTINGS,
-                    "/v",
-                    "ProxyEnable",
-                    "/t",
-                    "REG_DWORD",
-                    "/d",
-                    "0",
-                    "/f",
-                ])
-                .creation_flags(CREATE_NO_WINDOW)
-                .status();
-
-            return Err("Registry güncelleme başarısız, geri alındı.".to_string());
-        }
+        registry::set_proxy(port).map_err(|e| {
+            // Rollback
+            let _ = registry::clear_proxy();
+            format!("Registry güncelleme başarısız, geri alındı: {}", e)
+        })?;
 
         // 3. CRITICAL: Notify Windows about the change so browsers pick it up immediately
         notify_proxy_change();
@@ -1036,7 +1043,7 @@ fn check_admin() -> bool {
         use winapi::um::handleapi::CloseHandle;
         use winapi::um::processthreadsapi::{GetCurrentProcess, OpenProcessToken};
         use winapi::um::securitybaseapi::GetTokenInformation;
-        use winapi::um::winnt::{HANDLE, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
+        use winapi::um::winnt::{TokenElevation, HANDLE, TOKEN_ELEVATION, TOKEN_QUERY};
 
         unsafe {
             let mut token: HANDLE = ptr::null_mut();
@@ -1129,7 +1136,9 @@ async fn check_dns_latency(dns_ip: String) -> Result<u32, String> {
     }
 
     let start = std::time::Instant::now();
-    let addr = format!("{}:53", dns_ip).parse().map_err(|e: std::net::AddrParseError| e.to_string())?;
+    let addr = format!("{}:53", dns_ip)
+        .parse()
+        .map_err(|e: std::net::AddrParseError| e.to_string())?;
 
     match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(1500)) {
         Ok(_) => Ok(start.elapsed().as_millis() as u32),
@@ -1153,39 +1162,7 @@ fn startup_proxy_cleanup() -> Result<bool, String> {
             use std::process::Command;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-            // ProxyEnable = 0 (proxy'yi kapat)
-            let _ = Command::new("reg")
-                .args([
-                    "add",
-                    REG_INTERNET_SETTINGS,
-                    "/v",
-                    "ProxyEnable",
-                    "/t",
-                    "REG_DWORD",
-                    "/d",
-                    "0",
-                    "/f",
-                ])
-                .creation_flags(CREATE_NO_WINDOW)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-
-            // ProxyServer sil
-            let _ = Command::new("reg")
-                .args(["delete", REG_INTERNET_SETTINGS, "/v", "ProxyServer", "/f"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-
-            // ProxyOverride sil
-            let _ = Command::new("reg")
-                .args(["delete", REG_INTERNET_SETTINGS, "/v", "ProxyOverride", "/f"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
+            let _ = registry::clear_proxy();
 
             // DNS cache temizle
             let _ = Command::new("ipconfig")
@@ -1193,7 +1170,7 @@ fn startup_proxy_cleanup() -> Result<bool, String> {
                 .creation_flags(CREATE_NO_WINDOW)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
-                .status();
+                .spawn();
 
             // Tarayıcılara bildir
             notify_proxy_change();
@@ -1207,6 +1184,39 @@ fn startup_proxy_cleanup() -> Result<bool, String> {
     }
 
     Ok(false) // Temiz başlangıç
+}
+
+// 1. Sürücü kontrolü (lib.rs içine ekle)
+#[tauri::command]
+fn check_driver() -> bool {
+    std::path::Path::new("C:\\Windows\\System32\\wpcap.dll").exists()
+        || std::path::Path::new("C:\\Windows\\SysWOW64\\wpcap.dll").exists()
+}
+
+// 2. Sürücü kurulumu (lib.rs içine ekle)
+#[tauri::command]
+fn install_driver(app: tauri::AppHandle) -> Result<(), String> {
+    let resource_path = app
+        .path()
+        .resource_dir()
+        .map_err(|e| e.to_string())?
+        .join("binaries/npcap-installer.exe");
+
+    if !resource_path.exists() {
+        return Err("Sürücü dosyası bulunamadı. Lütfen uygulamayı yeniden yükleyin.".into());
+    }
+
+    // P0-FIX: Driver kurulumunu görünür yaptık (/S kaldırıldı, CREATE_NO_WINDOW kaldırıldı)
+    // Bu sayede kullanıcı UAC (Yönetici İzni) uyarısını görebilir ve kurulumu tamamlayabilir.
+    let status = std::process::Command::new(resource_path)
+        .status() // Normal status call, shows window
+        .map_err(|e| e.to_string())?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Kurulum kullanıcı tarafından iptal edildi veya başarısız oldu.".into())
+    }
 }
 
 #[tauri::command]
@@ -1246,9 +1256,9 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             {
-                use tauri::Manager;
                 use tauri::menu::{Menu, MenuItem};
                 use tauri::tray::TrayIconBuilder;
+                use tauri::Manager;
 
                 let show_i = MenuItem::with_id(app, "show", "Uygulamayı Aç", true, None::<&str>)?;
                 let support_i =
@@ -1368,6 +1378,8 @@ pub fn run() {
             check_dns_latency,
             save_sidecar_pid,
             startup_proxy_cleanup,
+            check_driver,
+            install_driver,
             quit_app
         ])
         .build(tauri::generate_context!())

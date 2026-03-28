@@ -21,13 +21,17 @@ export const DNS_MAP = {
   opendns: "208.67.222.222",
 };
 
-// DoH (DNS over HTTPS) URL'leri — Port 53 engelleme yapan ISP'lerde bile çalışır
+// DoH (DNS over HTTPS) URL'leri
+// ⚠️ KRİTİK: IP adresi kullanılıyor, domain DEĞİL
+// Neden: ISP'ler (Kablonet, TTNet vb.) DNS hijacking yaparak
+// "cloudflare-dns.com" domain'ini engelleyebilir/yanlış çözebilir.
+// IP ile bağlanınca DNS çözümleme GEREKMEZ → bootstrap sorunu olmaz.
 export const DOH_MAP = {
-  cloudflare: "https://cloudflare-dns.com/dns-query",
-  google: "https://dns.google/dns-query",
-  adguard: "https://dns.adguard-dns.com/dns-query",
-  quad9: "https://dns.quad9.net/dns-query",
-  opendns: "https://doh.opendns.com/dns-query",
+  cloudflare: "https://1.1.1.1/dns-query",
+  google: "https://8.8.8.8/dns-query",
+  adguard: "https://94.140.14.14/dns-query",
+  quad9: "https://9.9.9.9:5053/dns-query",
+  opendns: "https://208.67.222.222/dns-query",
 };
 
 // ===== Uygulama Sabitleri =====
@@ -47,7 +51,7 @@ export const RETRY_DELAYS = [2500, 3000, 6000, 12000, 20000];
 
 // ===== DPI Mod Timeout'ları (ms) =====
 export const DPI_TIMEOUTS = {
-  "0": 2000, // Turbo
-  "1": 2500, // Dengeli
-  "2": 4000, // Güçlü
+  "0": 3000, // Turbo — hafif DPI
+  "1": 5000, // Dengeli — çoğu ISP
+  "2": 8000, // Güçlü — agresif ISP (Kablonet vb.)
 };

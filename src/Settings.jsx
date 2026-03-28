@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  ChevronLeft, Globe, Power, Zap, RotateCw, Activity, Pin,
+  ChevronLeft, ChevronDown, Globe, Power, Zap, RotateCw, Activity, Pin,
   Youtube, Coffee, AlertTriangle, Check, Wrench, Languages, Bell, Shield, Settings as SettingsIcon
 } from 'lucide-react';
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart';
@@ -10,6 +10,7 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { invoke } from '@tauri-apps/api/core';
 import { getTranslations, SUPPORTED_LANGUAGES } from './i18n';
 import { URLS } from './constants';
+import { ISP_PROFILES, CHUNK_SIZES, DEFAULT_CHUNKS } from './profiles';
 import './App.css';
 
 const Toggle = ({ checked, onChange }) => (
@@ -27,6 +28,15 @@ const Toggle = ({ checked, onChange }) => (
 const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies }) => {
   const [activeTab, setActiveTab] = useState('general');
   const scrollRef = useRef(null);
+
+  const[expandedISP, setExpandedISP] = useState(null);
+  const [driverInstalled, setDriverInstalled] = useState(false);
+  const [needsRestart, setNeedsRestart] = useState(false);
+  const [showNpcapDetails, setShowNpcapDetails] = useState(false);
+
+  useEffect(() => {
+    invoke('check_driver').then(setDriverInstalled);
+}, []);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -306,6 +316,7 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
 
 
           {/* ================= NETWORK TAB ================= */}
+         {/* ================= NETWORK TAB ================= */}
           {activeTab === 'network' && (
             <motion.div
               key="network-tab"
@@ -315,28 +326,146 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
               transition={{ duration: 0.2, ease: "easeInOut" }}
               style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}
             >
-              {/* ========== 2. BAĞLANTI YÖNTEMİ ========== */}
+              {/* ========== 1. İSS AKILLI REHBERİ (PREMIUM UX) ========== */}
               <div className="v2-section">
-                <div className="v2-section-title">{t.sectionMethod}</div>
-                <p style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '0.35rem', marginBottom: '0.75rem', lineHeight: 1.4 }}>{t.sectionMethodWhy}</p>
+                <div className="v2-section-title" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Globe size={14} /> {t.issGuideTitle}
+                </div>
+                
+                <div style={{
+                  background: 'linear-gradient(145deg, rgba(30, 41, 59, 0.4) 0%, rgba(15, 23, 42, 0.4) 100%)',
+                  border: '1px solid rgba(255, 255, 255, 0.05)',
+                  borderRadius: '16px',
+                  padding: '6px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px'
+                }}>
+                  {ISP_PROFILES.filter(p => p.id !== 'other').map((isp) => {
+                    const nameKey = `iss${isp.id.charAt(0).toUpperCase() + isp.id.slice(1)}Name`;
+                    const descKey = `iss${isp.id.charAt(0).toUpperCase() + isp.id.slice(1)}Desc`;
+                    const ICON_MAP = { light: <Activity size={18} />, mid: <Zap size={18} />, heavy: <Shield size={18} /> };
+                    const ispData = {
+                      ...isp,
+                      name: t[nameKey] || isp.id,
+                      desc: t[descKey] || '',
+                      icon: ICON_MAP[isp.id] || <Globe size={18} />,
+                    };
+                    const fallbackChunk = DEFAULT_CHUNKS[ispData.mode] || 2;
+                    const isApplied = config.dpiMethod === ispData.mode && Number(config.httpsChunkSize || fallbackChunk) === ispData.chunk;
+                    const isExpanded = expandedISP === ispData.id;
+
+                    return (
+                      <div 
+                        key={ispData.id} 
+                        style={{ 
+                          background: isExpanded ? 'rgba(255,255,255,0.03)' : 'transparent',
+                          borderRadius: '12px',
+                          border: isExpanded ? `1px solid ${ispData.bg}` : '1px solid transparent',
+                          transition: 'all 0.3s ease',
+                          overflow: 'hidden'
+                        }}
+                      >
+                        {/* Başlık / Tıklanabilir Alan */}
+                        <div
+                          onClick={() => setExpandedISP(isExpanded ? null : ispData.id)}
+                          style={{ 
+                            padding: '12px 14px', 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: '12px',
+                            cursor: 'pointer' 
+                          }}
+                        >
+                          <div style={{ 
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            width: '36px', height: '36px', borderRadius: '10px',
+                            background: ispData.bg, color: ispData.color
+                          }}>
+                            {ispData.icon}
+                          </div>
+                          
+                          <div style={{ flex: 1 }}>
+                            <h4 style={{ margin: 0, color: '#f8fafc', fontSize: '0.9rem', fontWeight: 600 }}>{ispData.name}</h4>
+                            {ispData.logos && ispData.logos.length > 0 && (
+                              <div style={{ display: 'flex', gap: '6px', marginTop: '4px', marginBottom: '2px', alignItems: 'center' }}>
+                                {ispData.logos.map((logo, idx) => (
+                                  <img key={idx} src={logo} alt="ISP Logo" style={{ height: '14px', opacity: 0.7, filter: 'grayscale(0.3)' }} />
+                                ))}
+                              </div>
+                            )}
+                            <p style={{ margin: 0, color: '#64748b', fontSize: '0.75rem' }}>
+                              {isApplied ? <span style={{ color: ispData.color, fontWeight: 600 }}>✓ {t.issProfileActive}</span> : t.issProfileSee}
+                            </p>
+                          </div>
+
+                          <ChevronLeft 
+                            size={18} color="#64748b" 
+                            style={{ transform: isExpanded ? 'rotate(90deg)' : 'rotate(-90deg)', transition: 'transform 0.3s ease' }} 
+                          />
+                        </div>
+                        
+                        {/* Animasyonlu İçerik */}
+                        <AnimatePresence>
+                          {isExpanded && (
+                            <motion.div 
+                              initial={{ height: 0, opacity: 0 }} 
+                              animate={{ height: 'auto', opacity: 1 }} 
+                              exit={{ height: 0, opacity: 0 }} 
+                              style={{ overflow: 'hidden' }}
+                            >
+                              <div style={{ padding: '0 14px 14px 60px' }}>
+                                <p style={{ color: '#94a3b8', fontSize: '0.8rem', lineHeight: 1.5, margin: '0 0 12px 0' }}>{ispData.desc}</p>
+
+                                {!isApplied ? (
+                                  <button
+                                    onClick={() => {
+                                      updateConfig('dpiMethod', ispData.mode);
+                                      updateConfig('httpsChunkSize', ispData.chunk);
+                                    }}
+                                    style={{ 
+                                      background: ispData.color, color: '#000', border: 'none', 
+                                      padding: '8px 16px', borderRadius: '8px', fontSize: '0.8rem', 
+                                      fontWeight: 700, cursor: 'pointer', display: 'flex', 
+                                      alignItems: 'center', gap: '6px', boxShadow: `0 4px 12px ${ispData.bg}`,
+                                      transition: 'transform 0.2s'
+                                    }}
+                                    onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-2px)'}
+                                    onMouseLeave={e => e.currentTarget.style.transform = 'translateY(0)'}
+                                  >
+                                    <Check size={16} /> {t.issApplyBtn}
+                                  </button>
+                                ) : (
+                                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 12px', background: 'rgba(255,255,255,0.05)', borderRadius: '6px', color: '#cbd5e1', fontSize: '0.75rem' }}>
+                                    <Check size={14} color={ispData.color} /> {t.issAppliedMsg}
+                                  </div>
+                                )}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* ========== 2. MANUEL BAĞLANTI YÖNTEMİ ========== */}
+              <div className="v2-section">
+                <div className="v2-section-title">{t.sectionBypass}</div>
                 <div className="v2-card">
-                    {/* Turbo Mod - En hızlı */}
+                    {/* Turbo Mod */}
                     <div 
                       className={`v2-item hover-effect ${config.dpiMethod === '0' ? 'v2-selected' : ''}`}
-                      style={{ 
-                        background: config.dpiMethod === '0' ? 'rgba(234, 179, 8, 0.1)' : 'transparent',
-                        opacity: config.dpiMethod === '0' ? 1 : 0.5,
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease'
-                      }}
+                      style={{ background: config.dpiMethod === '0' ? 'rgba(234, 179, 8, 0.1)' : 'transparent', opacity: config.dpiMethod === '0' ? 1 : 0.5, cursor: 'pointer', transition: 'all 0.2s ease' }}
                       onClick={() => updateConfig('dpiMethod', '0')}
                     >
                       <div className="v2-icon yellow" style={{ background: config.dpiMethod === '0' ? 'rgba(234, 179, 8, 0.2)' : '' }}>
                         <Activity size={20} className={config.dpiMethod === '0' ? 'active-icon' : ''} />
                       </div>
                       <div className="v2-item-text">
-                        <h3 style={{ color: config.dpiMethod === '0' ? '#facc15' : '' }}>{t.methodTurbo || 'Turbo Mod'}</h3>
-                        <p>{t.methodTurboDesc || 'En düşük gecikme, hafif DPI için'}</p>
+                        <h3 style={{ color: config.dpiMethod === '0' ? '#facc15' : '' }}>{t.modeTurboName}</h3>
+                        <p>{t.modeTurboDesc}</p>
                       </div>
                       <div className={`v2-radio ${config.dpiMethod === '0' ? 'on' : ''}`}>
                          {config.dpiMethod === '0' && <div className="v2-radio-dot" />}
@@ -345,23 +474,18 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
 
                     <div className="v2-divider" />
 
-                    {/* Dengeli Mod (Önerilen) - Ortada */}
+                    {/* Dengeli Mod */}
                     <div 
                       className={`v2-item hover-effect ${config.dpiMethod === '1' ? 'v2-selected' : ''}`}
-                      style={{ 
-                        background: config.dpiMethod === '1' ? 'rgba(34, 197, 94, 0.1)' : 'transparent',
-                        opacity: config.dpiMethod === '1' ? 1 : 0.5,
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease'
-                      }}
+                      style={{ background: config.dpiMethod === '1' ? 'rgba(34, 197, 94, 0.1)' : 'transparent', opacity: config.dpiMethod === '1' ? 1 : 0.5, cursor: 'pointer', transition: 'all 0.2s ease' }}
                       onClick={() => updateConfig('dpiMethod', '1')}
                     >
                       <div className="v2-icon green" style={{ background: config.dpiMethod === '1' ? 'rgba(34, 197, 94, 0.2)' : '' }}>
                         <Zap size={20} className={config.dpiMethod === '1' ? 'active-icon' : ''} />
                       </div>
                       <div className="v2-item-text">
-                        <h3 style={{ color: config.dpiMethod === '1' ? '#4ade80' : '' }}>{t.methodBalanced || 'Dengeli Mod (Önerilen)'}</h3>
-                        <p>{t.methodBalancedDesc || 'Hızlı + güçlü bypass, çoğu ISP\'de çalışır'}</p>
+                        <h3 style={{ color: config.dpiMethod === '1' ? '#4ade80' : '' }}>{t.modeBalancedName}</h3>
+                        <p>{t.modeBalancedDesc}</p>
                       </div>
                       <div className={`v2-radio ${config.dpiMethod === '1' ? 'on' : ''}`}>
                          {config.dpiMethod === '1' && <div className="v2-radio-dot" />}
@@ -370,7 +494,7 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
 
                     <div className="v2-divider" />
 
-                    {/* Güçlü Mod - En agresif */}
+                   {/* Güçlü Mod*/}
                     <div 
                       className={`v2-item hover-effect ${config.dpiMethod === '2' ? 'v2-selected' : ''}`}
                       style={{ 
@@ -385,25 +509,142 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
                         <Shield size={20} className={config.dpiMethod === '2' ? 'active-icon' : ''} />
                       </div>
                       <div className="v2-item-text">
-                        <h3 style={{ color: config.dpiMethod === '2' ? '#60a5fa' : '' }}>{t.methodStrong || 'Güçlü Mod'}</h3>
-                        <p>{t.methodStrongDesc || 'En güçlü bypass, zor ISP\'ler için (latency ekler)'}</p>
+                        <h3 style={{ color: config.dpiMethod === '2' ? '#60a5fa' : '' }}>{t.modeStrongName}</h3>
+                        <p>{t.modeStrongDesc}</p>
                       </div>
                       <div className={`v2-radio ${config.dpiMethod === '2' ? 'on' : ''}`}>
                          {config.dpiMethod === '2' && <div className="v2-radio-dot" />}
                       </div>
                     </div>
 
-                    {/* Chunk size – Dengeli ve Güçlü modda görünür */}
+                    {/* Npcap Gelişmiş Bypass — Güçlü Mod altında */}
+                    <AnimatePresence>
+                      {config.dpiMethod === '2' && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          transition={{ duration: 0.25, ease: 'easeInOut' }}
+                          style={{ overflow: 'hidden' }}
+                        >
+                          <div className="v2-divider" />
+                          {driverInstalled ? (
+                            <div style={{ padding: '10px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              <div 
+                                className="v2-item" 
+                                style={{ padding: 0 }}
+                              >
+                                <div className="v2-icon" style={{ background: 'rgba(168, 85, 247, 0.15)', color: '#a855f7', width: '32px', height: '32px', minWidth: '32px' }}>
+                                  <Shield size={16} />
+                                </div>
+                                <div className="v2-item-text">
+                                  <h3 style={{ color: config.advancedBypass !== false ? '#d8b4fe' : '', fontSize: '0.85rem' }}>{t.advancedFeaturesToggle}</h3>
+                                  <p style={{ fontSize: '0.7rem' }}>{t.advancedFeaturesToggleDesc}</p>
+                                </div>
+                                <Toggle checked={config.advancedBypass !== false} onChange={(v) => updateConfig('advancedBypass', v)} />
+                              </div>
+                              {needsRestart && (
+                                <div style={{ 
+                                  display: 'flex', alignItems: 'center', gap: '6px',
+                                  padding: '6px 10px', borderRadius: '6px',
+                                  background: 'rgba(251, 146, 60, 0.08)', 
+                                  border: '1px solid rgba(251, 146, 60, 0.15)'
+                                }}>
+                                  <AlertTriangle size={12} color="#fb923c" />
+                                  <span style={{ fontSize: '0.65rem', color: '#fb923c', fontWeight: 500 }}>
+                                    {t.npcapRestartWarning}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div style={{ padding: '6px 16px 10px' }}>
+                              {/* Subtle hint pill */}
+                              <div 
+                                onClick={() => setShowNpcapDetails(!showNpcapDetails)}
+                                style={{ 
+                                  display: 'inline-flex', alignItems: 'center', gap: '6px', 
+                                  cursor: 'pointer', padding: '5px 10px',
+                                  borderRadius: '8px',
+                                  background: 'rgba(245, 158, 11, 0.06)',
+                                  border: '1px solid rgba(245, 158, 11, 0.12)',
+                                  transition: 'all 0.2s ease'
+                                }}
+                                onMouseEnter={e => {
+                                  e.currentTarget.style.background = 'rgba(245, 158, 11, 0.1)';
+                                  e.currentTarget.style.borderColor = 'rgba(245, 158, 11, 0.2)';
+                                }}
+                                onMouseLeave={e => {
+                                  e.currentTarget.style.background = 'rgba(245, 158, 11, 0.06)';
+                                  e.currentTarget.style.borderColor = 'rgba(245, 158, 11, 0.12)';
+                                }}
+                              >
+                                <Zap size={11} color="#f59e0b" />
+                                <span style={{ fontSize: '0.68rem', color: '#d4a14a', fontWeight: 500 }}>
+                                  {t.advancedNpcapHint}
+                                </span>
+                                <ChevronDown size={11} color="#d4a14a" style={{ 
+                                  transform: showNpcapDetails ? 'rotate(180deg)' : 'rotate(0)', 
+                                  transition: 'transform 0.2s',
+                                  marginLeft: '2px'
+                                }} />
+                              </div>
+
+                              {/* Açılabilir detay */}
+                              <AnimatePresence>
+                                {showNpcapDetails && (
+                                  <motion.div
+                                    initial={{ opacity: 0, height: 0 }}
+                                    animate={{ opacity: 1, height: 'auto' }}
+                                    exit={{ opacity: 0, height: 0 }}
+                                    transition={{ duration: 0.2 }}
+                                    style={{ overflow: 'hidden' }}
+                                  >
+                                    <div style={{ paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                      <p style={{ fontSize: '0.7rem', color: '#64748b', margin: 0, lineHeight: 1.4 }}>{t.advancedNpcapWhy}</p>
+                                      <motion.button 
+                                        whileHover={{ scale: 1.01 }}
+                                        whileTap={{ scale: 0.99 }}
+                                        onClick={async () => {
+                                          try {
+                                            await invoke('install_driver');
+                                            const installed = await invoke('check_driver');
+                                            setDriverInstalled(installed);
+                                            if (installed) setNeedsRestart(true);
+                                          } catch (e) {
+                                            console.error('Driver install failed:', e);
+                                          }
+                                        }} 
+                                        style={{ 
+                                          background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                                          color: '#000', border: 'none', padding: '8px 12px', borderRadius: '8px', 
+                                          fontSize: '0.7rem', fontWeight: 800, cursor: 'pointer',
+                                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                          gap: '6px', width: '100%', textTransform: 'uppercase', letterSpacing: '0.5px',
+                                          boxShadow: '0 4px 12px rgba(245, 158, 11, 0.15)'
+                                        }}
+                                      >
+                                        <Wrench size={13} />
+                                        {t.advancedNpcapInstallBtn}
+                                      </motion.button>
+                                    </div>
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                          )}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    {/* Chunk size Seçimi */}
                     {(config.dpiMethod === '1' || config.dpiMethod === '2') && (
                       <>
                         <div className="v2-divider" />
-                        <div style={{ display: 'flex', width: '100%', padding: 0, minHeight: 0, boxSizing: 'border-box' }}>
-                          {[
-                            { value: 4, label: '4' },
-                            { value: 8, label: '8' },
-                            { value: 16, label: '16' },
-                          ].map((opt) => {
-                            const isSelected = Number(config.httpsChunkSize || 4) === opt.value;
+                        <div style={{ display: 'flex', width: '100%', padding: '6px 12px', boxSizing: 'border-box' }}>
+                          {CHUNK_SIZES.map((opt) => {
+                            const fallbackChunk = DEFAULT_CHUNKS[config.dpiMethod] || 2;
+                            const isSelected = Number(config.httpsChunkSize || fallbackChunk) === opt.value;
                             const accentColor = config.dpiMethod === '2' ? '#60a5fa' : '#4ade80';
                             const accentBg = config.dpiMethod === '2' ? 'rgba(59, 130, 246, 0.18)' : 'rgba(34, 197, 94, 0.18)';
                             return (
@@ -411,22 +652,11 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
                                 key={opt.value}
                                 type="button"
                                 onClick={() => updateConfig('httpsChunkSize', opt.value)}
-                                title={opt.value === 4 ? t.chunkSize4 : opt.value === 8 ? t.chunkSize8 : t.chunkSize16}
                                 style={{
-                                  flex: 1,
-                                  height: '36px',
-                                  border: 'none',
-                                  margin: 0,
-                                  padding: '0 12px',
-                                  background: isSelected ? accentBg : 'transparent',
+                                  flex: 1, height: '32px', border: 'none', margin: '0 4px', borderRadius: '6px',
+                                  background: isSelected ? accentBg : 'rgba(255, 255, 255, 0.03)',
                                   color: isSelected ? accentColor : '#94a3b8',
-                                  fontSize: '0.9rem',
-                                  fontWeight: 600,
-                                  cursor: 'pointer',
-                                  transition: 'background 0.2s, color 0.2s',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
+                                  fontSize: '0.85rem', fontWeight: isSelected ? 700 : 500, cursor: 'pointer', transition: 'all 0.2s'
                                 }}
                               >
                                 {opt.label}
@@ -438,9 +668,29 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
                     )}
                 </div>
               </div>
-              {(config.dpiMethod === '1' || config.dpiMethod === '2') && (
-                <p style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '0.35rem', marginBottom: 0, lineHeight: 1.4 }}>{t.chunkSizeDesc}</p>
-              )}
+
+              {/* ========== 3. EKSTRA AĞ AYARLARI (IPv4 ve LAN) ========== */}
+              <div className="v2-section">
+                <div className="v2-section-title">{t.sectionExtraNetwork}</div>
+                <div className="v2-card">
+                  
+                  {/* YENİ EKLENEN IPv4 TOGGLE'I */}
+                  <div className="v2-item" style={{ padding: '1rem' }}>
+                    <div className="v2-icon" style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444' }}>
+                      <Activity size={20} />
+                    </div>
+                    <div className="v2-item-text">
+                      <h3 style={{ color: '#fca5a5' }}>{t.ipv4ForceTitle}</h3>
+                      <p>{t.ipv4ForceDesc}</p>
+                    </div>
+                    {/* ipv4Only undefined ise default true kabul ediyoruz */}
+                    <Toggle checked={config.ipv4Only !== false} onChange={(v) => updateConfig('ipv4Only', v)} />
+                  </div>
+
+                </div>
+              </div>
+
+
 
               {/* ========== 2. AĞ AYARLARI ========== */}
               <div className="v2-section">
