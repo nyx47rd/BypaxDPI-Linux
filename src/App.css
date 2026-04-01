@@ -507,6 +507,57 @@ body {
 }
 
 /* ==========================================
+   SOCIAL LINKS BAR
+   ========================================== */
+.social-links-bar {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 2rem 0.75rem;
+  gap: 0.6rem;
+}
+
+.social-link-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  height: 36px;
+  max-width: 160px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  color: var(--text-secondary);
+  background: var(--overlay-subtle);
+  cursor: pointer;
+  transition: all var(--transition-base);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  gap: 0.45rem;
+}
+
+.social-link-btn:hover {
+  transform: translateY(-1px);
+  color: #ffffff;
+}
+
+.social-link-btn.youtube-btn:hover {
+  border-color: rgba(220, 38, 38, 0.4);
+  background: rgba(220, 38, 38, 0.12);
+  box-shadow: 0 4px 14px rgba(220, 38, 38, 0.2);
+  color: #f87171;
+}
+
+.social-link-btn.patreon-btn:hover {
+  border-color: rgba(249, 115, 22, 0.4);
+  background: rgba(249, 115, 22, 0.12);
+  box-shadow: 0 4px 14px rgba(249, 115, 22, 0.2);
+  color: #fb923c;
+}
+
+/* ==========================================
    BOTTOM NAVIGATION
    ========================================== */
 .bottom-nav {

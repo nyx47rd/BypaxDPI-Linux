@@ -35,17 +35,17 @@ export const ISP_PROFILES = [
     color: '#facc15', 
     bg: 'rgba(250, 204, 21, 0.1)',
     icon: '⚡',
-    logos: [turknetLogo, milenicomLogo],
+    logos: [turknetLogo],
     // i18n key'leri: issLightName, issLightDesc
   },
   { 
     id: 'mid', 
-    mode: '1', 
-    chunk: 2, 
-    color: '#4ade80', 
-    bg: 'rgba(74, 222, 128, 0.1)',
+    mode: '2', 
+    chunk: 1, 
+    color: '#60a5fa', 
+    bg: 'rgba(96, 165, 250, 0.1)',
     icon: '🛡️',
-    logos: [turkTelekomLogo, vodafoneLogo],
+    logos: [],
     // i18n key'leri: issMidName, issMidDesc
   },
   { 
@@ -55,13 +55,13 @@ export const ISP_PROFILES = [
     color: '#60a5fa', 
     bg: 'rgba(96, 165, 250, 0.1)',
     icon: '🔒',
-    logos: [kablonetLogo, superonlineLogo],
+    logos: [kablonetLogo, superonlineLogo,turkTelekomLogo, vodafoneLogo, milenicomLogo],
     // i18n key'leri: issHeavyName, issHeavyDesc
   },
   { 
     id: 'other', 
-    mode: '1', 
-    chunk: 4, 
+    mode: '2', 
+    chunk: 1, 
     color: '#a78bfa', 
     bg: 'rgba(167, 139, 250, 0.1)',
     icon: '🌐',

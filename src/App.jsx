@@ -24,6 +24,8 @@ import {
   Smartphone,
   HelpCircle,
   AlertTriangle,
+  Check,
+  ZoomIn,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -50,12 +52,44 @@ function App() {
   const [pacPort, setPacPort] = useState(8787); // ✅ PAC port (dinamik)
   const [showConnectionModal, setShowConnectionModal] = useState(false); // ✅ Modal State
   const [connectionModalTab, setConnectionModalTab] = useState("pac"); // pac | manual
+  const [copiedField, setCopiedField] = useState(null);
+  const [showLargeQr, setShowLargeQr] = useState(false);
+
+  const handleCopyField = async (text, fieldName) => {
+    try {
+      await writeText(text);
+      setCopiedField(fieldName);
+      setTimeout(() => setCopiedField(null), 1500);
+    } catch (e) {
+      console.error("Copy failed:", e);
+    }
+  };
   const [isProcessing, setIsProcessing] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [isAdmin, setIsAdmin] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine); // ✅ Internet Durumu
   const [dnsLatencies, setDnsLatencies] = useState({}); // ✅ #5: DNS ping sonuçları kalcı
+  const [appIsClosingState, setAppIsClosingState] = useState(false); // Shutdown UX
+  const [closingStep, setClosingStep] = useState(0);
+  const [closingDots, setClosingDots] = useState("");
+
+  useEffect(() => {
+    if (appIsClosingState) {
+      const stepTimer = setTimeout(() => {
+        setClosingStep(1);
+      }, 500);
+
+      const dotTimer = setInterval(() => {
+        setClosingDots(prev => prev.length >= 3 ? "" : prev + ".");
+      }, 300);
+
+      return () => {
+        clearTimeout(stepTimer);
+        clearInterval(dotTimer);
+      };
+    }
+  }, [appIsClosingState]);
 
   // Check Admin on Mount
   useEffect(() => {
@@ -122,9 +156,10 @@ function App() {
       dnsMode: "manual",
       selectedDns: "cloudflare",
       autoReconnect: true,
-      dpiMethod: "1",
-      httpsChunkSize: 2,
+      dpiMethod: "2",
+      httpsChunkSize: 1,
       ipv4Only: true,
+      selectedIspProfile: "heavy",
     };
 
     const saved = localStorage.getItem("bypax_config");
@@ -599,12 +634,12 @@ function App() {
 
       // Optimized regex pattern - compiled once (regex literal / karışmasın diye string + new RegExp)
       const SKIP_PATTERN = new RegExp(
-        "\\[(?:PROXY|DNS|HTTPS|CACHE|app)]|method:\\s*CONNECT|cache (?:miss|hit)|resolving|routing|resolution took|new conn|client sent hello|shouldExploit|useSystemDns|fragmentation|conn established|writing chunked|caching \\d+ records|[a-f0-9]{8}-[a-f0-9]{8}|d88|Y88|88P|level=|ctrl \\+ c|listen_addr|dns_addr|github\\.com|spoofdpi|connection timeout|\\[::1\\]|ipv6|AAAA|no suitable address|network is unreachable|connectex.*\\[",
+        "\\[(?:PROXY|DNS|HTTPS|CACHE|app)]|method:\\s*CONNECT|cache (?:miss|hit)|resolving|routing|resolution took|new conn|client sent hello|shouldExploit|useSystemDns|fragmentation|conn established|writing chunked|caching \\d+ records|[a-f0-9]{8}-[a-f0-9]{8}|d88|Y88|88P|level=|ctrl \\+ c|listen_addr|dns_addr|github\\.com|spoofdpi|connection timeout|\\[::1\\]|ipv6|AAAA|no suitable address|network is unreachable|connectex.*\\[|telemetry\\.net|dns lookup failed",
         "i",
       );
       // Bağlantı kesilirken / yeniden bağlanırken SpoofDPI tüm tünelleri kapatır; her biri "error handling request" / "wsarecv ... aborted" WRN basar - kullanıcı loguna taşıma
       const isTunnelShutdownNoise = (l) =>
-        /\[pxy\].*error handling request|unsuccessful tunnel|wsarecv|aborted by the software in your host machine/i.test(
+        /\[pxy\].*error handling request|unsuccessful tunnel|wsarecv|aborted by the software in your host machine|failed to read http request|malformed HTTP request|invalid method/i.test(
           l,
         );
 
@@ -1207,6 +1242,7 @@ function App() {
 
         isExiting.current = true;
         userIntentDisconnect.current = true;
+        setAppIsClosingState(true);
 
         // ✅ Timer'ı temizle
         if (retryTimer.current) {
@@ -1223,12 +1259,15 @@ function App() {
               childProcess.current = null;
             }
             await clearProxy(true);
+            
+            // ✅ Animasyonun görünmesi ve PAC grace period için en az 1.5s bekle
+            await new Promise((resolve) => setTimeout(resolve, 1000));
           } catch (e) {
             console.error("Cleanup failed:", e);
           }
         })();
 
-        const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 3000));
+        const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 4000));
         await Promise.race([cleanupPromise, timeoutPromise]);
 
         try {
@@ -1302,6 +1341,7 @@ function App() {
     isExiting.current = true;
     isAppClosingRef.current = true;
     userIntentDisconnect.current = true; // Reconnect engelle
+    setAppIsClosingState(true);
     addLog(t.logShutdownStarting, "warn", { i18nKey: "logShutdownStarting" });
 
     // ✅ Timer'ı temizle
@@ -1324,12 +1364,15 @@ function App() {
           await invoke("stop_pac_server");
         } catch (_) {}
         await clearProxy(true);
+        
+        // ✅ Animasyonun görünmesi ve PAC grace period için en az 1.5s bekle
+        await new Promise((resolve) => setTimeout(resolve, 1500));
       } catch (e) {
         console.error("Cleanup failed:", e);
       }
     })();
 
-    const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 3000));
+    const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 4000));
     await Promise.race([cleanupPromise, timeoutPromise]);
 
     try {
@@ -1343,20 +1386,26 @@ function App() {
   // Auto-connect on mount mantığı P1-FIX kapsamında main cleanup rutinine taşındı (Race Condition'ı önlemek için)
   // P1-FIX: Ayarlardan manuel "İnterneti Onar" tetiklendiğinde senkronize olarak Sidecar'ı kapat ve state'i sıfırla
   useEffect(() => {
-    const handler = () => {
+    const handleForceDisconnect = async (e) => {
+      console.log('[FORCE-DISCONNECT]', e.detail?.reason);
+      
+      // Bağlıysa kes
       if (childProcess.current) {
         userIntentDisconnect.current = true;
-        childProcess.current.kill().catch(() => {});
+        try {
+          await invoke('stop_pac_server');
+          await childProcess.current.kill();
+        } catch (_) {}
         childProcess.current = null;
       }
+      
       setIsConnected(false);
       setIsProcessing(false);
-      updateTrayTooltip("disconnected");
-      addLog(t.logProxyForceCleared || "Proxy manuel olarak sıfırlandı", "info");
+      updateTrayTooltip('disconnected');
     };
     
-    window.addEventListener('bypax-force-disconnect', handler);
-    return () => window.removeEventListener('bypax-force-disconnect', handler);
+    window.addEventListener('bypax-force-disconnect', handleForceDisconnect);
+    return () => window.removeEventListener('bypax-force-disconnect', handleForceDisconnect);
   }, []);
 
   // DPI & Layout Scaling Fix
@@ -1446,7 +1495,78 @@ function App() {
   return (
     <div className="app-container fade-in">
       <AnimatePresence>
-        {!isAdmin && !import.meta.env.DEV && (
+        {appIsClosingState && (
+          <motion.div
+            className="closing-screen-overlay"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            style={{
+              zIndex: 999999,
+              background: "#09090b",
+              position: "fixed",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              textAlign: "center",
+              padding: "2rem",
+            }}
+          >
+            <div
+              style={{
+                zIndex: 1,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+              }}
+            >
+              <img
+                src="/bypax-logo.png"
+                alt="BypaxDPI"
+                style={{
+                  width: "70px",
+                  height: "70px",
+                  marginBottom: "1.5rem",
+                  borderRadius: "12px",
+                  boxShadow: "0 8px 32px rgba(0, 0, 0, 0.3)",
+                  animation: "pulse 2s infinite ease-in-out",
+                }}
+              />
+              <h1 style={{ fontSize: "1.3rem", fontWeight: "600", color: "#fff", marginBottom: "0.5rem" }}>
+                {t.confirmExitTitle || "BypaxDPI Kapatılıyor"}
+              </h1>
+              <p style={{ color: "#a1a1aa", fontSize: "0.95rem" }}>
+                <AnimatePresence mode="wait">
+                  <motion.span
+                    key={closingStep}
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -5 }}
+                    transition={{ duration: 0.2 }}
+                    style={{ display: "inline-block" }}
+                  >
+                    {closingStep === 0 
+                      ? (t.logShutdownStarting || "Güvenli bağlantı sonlandırılıyor").replace(/\.+$/, "")
+                      : "Uygulama kapatılıyor"}
+                    <span style={{ display: "inline-block", width: "16px", textAlign: "left" }}>
+                      {closingDots}
+                    </span>
+                  </motion.span>
+                </AnimatePresence>
+              </p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {!isAdmin && !import.meta.env.DEV && !appIsClosingState && (
           <motion.div
             className="v2-settings-overlay"
             initial={{ opacity: 0 }}
@@ -1689,7 +1809,7 @@ function App() {
                 {ISP_PROFILES.map((isp) => {
                   const nameKey = `iss${isp.id.charAt(0).toUpperCase() + isp.id.slice(1)}Name`;
                   const ispName = t[nameKey] || isp.id;
-                  const isSelected = config.dpiMethod === isp.mode && Number(config.httpsChunkSize) === isp.chunk;
+                  const isSelected = config.selectedIspProfile === isp.id;
                   return (
                     <motion.div
                       key={isp.id}
@@ -1698,6 +1818,7 @@ function App() {
                       onClick={() => {
                         updateConfig('dpiMethod', isp.mode);
                         updateConfig('httpsChunkSize', isp.chunk);
+                        updateConfig('selectedIspProfile', isp.id);
                       }}
                       style={{
                         padding: "14px 16px",
@@ -1975,6 +2096,38 @@ function App() {
         </button>
       </div>
 
+      {/* Social Links — animasyonlu giriş/çıkış */}
+      <AnimatePresence>
+        {!isConnected && !isProcessing && (
+          <motion.div
+            className="social-links-bar"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 10 }}
+            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+          >
+            <button
+              className="social-link-btn youtube-btn"
+              onClick={() => openUrl(URLS.youtube)}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+              </svg>
+              <span>{t.devSubscribe}</span>
+            </button>
+            <button
+              className="social-link-btn patreon-btn"
+              onClick={() => openUrl(URLS.patreon)}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M15.386.524c-4.764 0-8.64 3.876-8.64 8.64 0 4.75 3.876 8.613 8.64 8.613 4.75 0 8.614-3.864 8.614-8.613C24 4.4 20.136.524 15.386.524zM.003 23.537h4.22V.524H.003v23.013z"/>
+              </svg>
+              <span>{t.devSupport}</span>
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Bottom Navigation */}
       <nav className="bottom-nav">
         <button className="nav-btn" onClick={() => setShowSettings(true)}>
@@ -2082,7 +2235,8 @@ function App() {
               className="connection-modal"
               style={{
                 zIndex: 1,
-                maxWidth: "360px",
+                maxWidth: "450px",
+                width: "125%",
                 background: "#18181b",
                 border: "1px solid rgba(255, 255, 255, 0.12)",
                 boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
@@ -2226,89 +2380,98 @@ function App() {
                 </div>
 
                 {connectionModalTab === "pac" && (
-                  <>
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "center",
-                        marginBottom: "0.5rem",
-                      }}
-                    >
-                      <QRCodeSVG
-                        value={`http://${lanIp}:${pacPort}/`}
-                        size={120}
-                        level="M"
-                      />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', marginBottom: '0.5rem' }}>
+                    {/* Note */}
+                    <div style={{
+                        background: 'rgba(239, 68, 68, 0.08)',
+                        border: '1px solid rgba(239, 68, 68, 0.2)',
+                        borderRadius: '12px',
+                        padding: '10px 12px',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '10px',
+                        textAlign: 'left'
+                    }}>
+                        <AlertTriangle size={18} color="#f87171" style={{ flexShrink: 0, marginTop: '1px' }} />
+                        <div style={{ fontSize: '0.75rem', color: '#fca5a5', lineHeight: 1.4 }}>
+                           <strong style={{ color: '#ef4444' }}>{t.modalPacWarningTitle}</strong> {t.modalPacWarningDesc}
+                        </div>
                     </div>
-                    <p
-                      style={{
-                        fontSize: "0.75rem",
-                        color: "#71717a",
-                        textAlign: "center",
-                        margin: "0 0 1rem",
-                      }}
-                    >
-                      {t.modalPacQrCaption}
-                    </p>
-                    <p
-                      style={{
-                        fontSize: "0.85rem",
-                        color: "#94a3b8",
-                        lineHeight: "1.5",
-                        marginBottom: "0.75rem",
-                      }}
-                    >
-                      <span
-                        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t.modalDescPac, PURIFY_CONFIG) }}
-                      />
-                    </p>
-                    <div style={{ marginBottom: "0.75rem" }}>
-                      <label
-                        style={{
-                          display: "block",
-                          fontSize: "0.75rem",
-                          color: "#22c55e",
-                          marginBottom: "0.5rem",
-                          textTransform: "uppercase",
-                          fontWeight: "600",
-                          letterSpacing: "0.05em",
-                        }}
-                      >
-                        {t.modalPacUrl}
-                      </label>
-                      <div
-                        className="code-box"
-                        onClick={() =>
-                          writeText(`http://${lanIp}:${pacPort}/proxy.pac`)
-                        }
-                        title="Kopyala"
-                      >
-                        <span
-                          style={{ fontSize: "0.8rem", wordBreak: "break-all" }}
+                    {/* Step 1: Install Guide */}
+                    <div style={{
+                        background: 'rgba(59, 130, 246, 0.08)',
+                        border: '1px solid rgba(59, 130, 246, 0.2)',
+                        borderRadius: '12px',
+                        padding: '12px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px'
+                    }}>
+                       <div
+                         onClick={() => setShowLargeQr(true)}
+                         title="Büyütmek için tıklayın"
+                         style={{ background: '#fff', padding: '4px', borderRadius: '8px', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer', position: 'relative', transition: 'transform 0.2s', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
+                         onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.05)'}
+                         onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+                       >
+                         <QRCodeSVG value={`http://${lanIp}:${pacPort}/`} size={64} level="M" />
+                         <div style={{ display: 'flex', alignItems: 'center', gap: '2px', background: 'rgba(59, 130, 246, 0.1)', color: '#2563eb', fontSize: '0.65rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', marginTop: '4px' }}>
+                           <ZoomIn size={10} strokeWidth={3} />
+                           BÜYÜT
+                         </div>
+                       </div>
+                       <div>
+                         <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#60a5fa', marginBottom: '2px' }}>{t.modalPacStep1Title}</div>
+                         <div style={{ fontSize: '0.75rem', color: '#94a3b8', lineHeight: 1.4 }}>{t.modalPacStep1Desc}</div>
+                       </div>
+                    </div>
+
+                    {/* Step 2: PAC URL */}
+                    <div style={{
+                        background: 'rgba(34, 197, 94, 0.08)',
+                        border: '1px solid rgba(34, 197, 94, 0.2)',
+                        borderRadius: '12px',
+                        padding: '12px',
+                    }}>
+                       <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#4ade80', marginBottom: '4px' }}>{t.modalPacStep2Title}</div>
+                       <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '8px', lineHeight: 1.4 }}>{t.modalPacStep2Desc}</div>
+                       
+                       <div
+                          className="code-box"
+                          onClick={() => handleCopyField(`http://${lanIp}:${pacPort}/proxy.pac`, 'pac')}
+                          title="Kopyala"
+                          style={{ padding: '8px 12px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(34, 197, 94, 0.15)', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', transition: 'all 0.2s', margin: 0 }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(0,0,0,0.5)'; e.currentTarget.style.borderColor = 'rgba(34, 197, 94, 0.3)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(0,0,0,0.3)'; e.currentTarget.style.borderColor = 'rgba(34, 197, 94, 0.15)'; }}
                         >
-                          http://{lanIp}:{pacPort}/proxy.pac
-                        </span>
-                        <Copy size={16} color="#71717a" />
-                      </div>
+                          <span style={{ fontSize: '0.8rem', whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: '#f8fafc', fontWeight: 500, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
+                            http://{lanIp}:{pacPort}/proxy.pac
+                          </span>
+                          {copiedField === 'pac' ? <Check size={16} color="#4ade80" style={{ flexShrink: 0, marginLeft: '8px' }} /> : <Copy size={16} color="#4ade80" style={{ flexShrink: 0, marginLeft: '8px' }} />}
+                        </div>
                     </div>
-                    <p
-                      style={{
-                        fontSize: "0.8rem",
-                        color: "#94a3b8",
-                        lineHeight: "1.5",
-                        marginBottom: "0.5rem",
-                        padding: "0 0.5rem",
-                      }}
-                    >
-                      <span
-                        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t.modalPacQrHint, PURIFY_CONFIG) }}
-                      />
-                    </p>
-                  </>
+                  </div>
                 )}
 
                 {connectionModalTab === "manual" && (
                   <>
+                    {/* Note */}
+                    <div style={{
+                        background: 'rgba(239, 68, 68, 0.08)',
+                        border: '1px solid rgba(239, 68, 68, 0.2)',
+                        borderRadius: '12px',
+                        padding: '10px 12px',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '10px',
+                        marginBottom: '1rem',
+                        textAlign: 'left'
+                    }}>
+                        <AlertTriangle size={18} color="#f87171" style={{ flexShrink: 0, marginTop: '1px' }} />
+                        <div style={{ fontSize: '0.75rem', color: '#fca5a5', lineHeight: 1.4 }}>
+                           <strong style={{ color: '#ef4444' }}>{t.modalManualWarningTitle}</strong> {t.modalManualWarningDesc}
+                        </div>
+                    </div>
                     <p
                       style={{
                         fontSize: "0.85rem",
@@ -2343,11 +2506,12 @@ function App() {
                         </label>
                         <div
                           className="code-box"
-                          onClick={() => writeText(lanIp)}
+                          onClick={() => handleCopyField(lanIp, 'host')}
                           title="Kopyala"
+                          style={{ transition: 'all 0.2s', background: copiedField === 'host' ? 'rgba(34, 197, 94, 0.1)' : undefined, borderColor: copiedField === 'host' ? 'rgba(34, 197, 94, 0.3)' : undefined }}
                         >
-                          <span>{lanIp}</span>
-                          <Copy size={16} color="#71717a" />
+                          <span style={{ color: copiedField === 'host' ? '#4ade80' : undefined }}>{lanIp}</span>
+                          {copiedField === 'host' ? <Check size={16} color="#4ade80" /> : <Copy size={16} color="#71717a" />}
                         </div>
                       </div>
                       <div>
@@ -2366,11 +2530,12 @@ function App() {
                         </label>
                         <div
                           className="code-box"
-                          onClick={() => writeText(currentPort.toString())}
+                          onClick={() => handleCopyField(currentPort.toString(), 'port')}
                           title="Kopyala"
+                          style={{ transition: 'all 0.2s', background: copiedField === 'port' ? 'rgba(34, 197, 94, 0.1)' : undefined, borderColor: copiedField === 'port' ? 'rgba(34, 197, 94, 0.3)' : undefined }}
                         >
-                          <span>{currentPort}</span>
-                          <Copy size={16} color="#71717a" />
+                          <span style={{ color: copiedField === 'port' ? '#4ade80' : undefined }}>{currentPort}</span>
+                          {copiedField === 'port' ? <Check size={16} color="#4ade80" /> : <Copy size={16} color="#71717a" />}
                         </div>
                       </div>
                     </div>
@@ -2412,6 +2577,40 @@ function App() {
                   {t.modalTutorial}
                 </button>
               </div>
+
+              {/* Büyütülmüş QR Kod Overlay */}
+              <AnimatePresence>
+                {showLargeQr && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      background: "rgba(24, 24, 27, 0.95)",
+                      backdropFilter: "blur(8px)",
+                      zIndex: 10,
+                      borderRadius: "16px",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: "24px",
+                      cursor: "pointer"
+                    }}
+                    onClick={() => setShowLargeQr(false)}
+                  >
+                    <div style={{ background: 'white', padding: '16px', borderRadius: '16px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)' }}>
+                      <QRCodeSVG value={`http://${lanIp}:${pacPort}/`} size={240} level="M" />
+                    </div>
+                    <div style={{ marginTop: '24px', color: '#a1a1aa', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(255,255,255,0.05)', padding: '8px 16px', borderRadius: '20px' }}>
+                      <X size={16} />
+                      Kapatmak için dokunun
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </motion.div>
           </motion.div>
         )}

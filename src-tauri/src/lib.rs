@@ -46,7 +46,48 @@ mod registry {
             .map_err(|e| format!("ProxyServer: {}", e))?;
         key.set_value("ProxyEnable", &1u32)
             .map_err(|e| format!("ProxyEnable: {}", e))?;
-        key.set_value("ProxyOverride", &"<local>")
+        let proxy_override = [
+            "<local>",
+            // ✅ FIX: LAN IP aralıkları — olmazsa tarayıcı LAN'daki PAC sunucusuna
+            //    SpoofDPI proxy üzerinden gider → döngü → timeout
+            "10.*",
+            "172.16.*",
+            "172.17.*",
+            "172.18.*",
+            "172.19.*",
+            "172.20.*",
+            "172.21.*",
+            "172.22.*",
+            "172.23.*",
+            "172.24.*",
+            "172.25.*",
+            "172.26.*",
+            "172.27.*",
+            "172.28.*",
+            "172.29.*",
+            "172.30.*",
+            "172.31.*",
+            "192.168.*",
+            // NCSI — WiFi "internet yok" simgesi fix
+            "*.msftconnecttest.com",
+            "*.msftncsi.com",
+            "dns.msn.com",
+            "ipv6.msftconnecttest.com",
+            // Android/iOS connectivity check
+            "connectivitycheck.gstatic.com",
+            "connectivitycheck.android.com",
+            "clients3.google.com",
+            "play.googleapis.com",
+            "captive.apple.com",
+            "gsp1.apple.com",
+            "connectivitycheck.samsung.com",
+            // Windows Update
+            "*.windowsupdate.com",
+            "*.delivery.mp.microsoft.com",
+        ]
+        .join(";");
+
+        key.set_value("ProxyOverride", &proxy_override)
             .map_err(|e| format!("ProxyOverride: {}", e))?;
         Ok(())
     }
@@ -192,35 +233,79 @@ fn get_safe_lan_ip() -> String {
         "mullvad",
         "windscribe",
         "surfshark",
+        "host-only",
+        "hostonly",
+        "vEthernet",
+        "npcap",
+        "miniport",
     ];
 
+    /// Bilinen sanal ağ IP aralıklarını kontrol eder.
+    /// Adaptör adı filtreleri yakalayamadığında (Windows generic isimlendirme) bu devreye girer.
+    fn is_virtual_ip_range(ip: &std::net::Ipv4Addr) -> bool {
+        let octets = ip.octets();
+        match (octets[0], octets[1]) {
+            // VirtualBox Host-Only: 192.168.56.x (varsayılan)
+            (192, 168) if octets[2] == 56 => true,
+            // VMware NAT: 192.168.19x.x
+            (192, 168) if octets[2] >= 190 => true,
+            // Docker default bridge: 172.17.x.x
+            (172, 17) => true,
+            // WSL: 172.x.x.x (genellikle 172.16-31 arası ama 172.17+ sanal olma ihtimali yüksek)
+            // Hamachi: 25.x.x.x
+            (25, _) => true,
+            // APIPA (otomatik atanmış, ağ bağlantısı yok): 169.254.x.x
+            (169, 254) => true,
+            _ => false,
+        }
+    }
+
     if let Ok(netifs) = list_afinet_netifas() {
-        // Önce IPv4 adresleri arasında gerçek adaptörü bul
+        // Debug: Tüm arayüzleri logla (sorun tespiti için)
         for (name, ip) in &netifs {
-            // Sadece IPv4
+            eprintln!("[NET-DEBUG] Interface: '{}' → {}", name, ip);
+        }
+
+        // PASS 1: Gerçek adaptör + gerçek IP aralığı
+        for (name, ip) in &netifs {
             if let IpAddr::V4(v4) = ip {
-                // Loopback ve link-local adresleri atla
                 if v4.is_loopback() || v4.is_link_local() {
                     continue;
                 }
-                // Sanal adaptör mü kontrol et
                 let name_lower = name.to_lowercase();
-                let is_virtual = VIRTUAL_KEYWORDS.iter().any(|kw| name_lower.contains(kw));
-                if !is_virtual {
+                let is_virtual_name = VIRTUAL_KEYWORDS.iter().any(|kw| name_lower.contains(kw));
+                let is_virtual_range = is_virtual_ip_range(v4);
+
+                if !is_virtual_name && !is_virtual_range {
+                    eprintln!(
+                        "[NET-SELECT] ✅ Gerçek adaptör seçildi: '{}' → {}",
+                        name, v4
+                    );
                     return v4.to_string();
                 }
             }
         }
-        // Hiç gerçek adaptör bulunamazsa, sanal olmayanları da dene (IPv4)
+
+        // PASS 2: Fallback — ad filtresi atlayıp sadece IP aralığı kontrol et
+        for (name, ip) in &netifs {
+            if let IpAddr::V4(v4) = ip {
+                if !v4.is_loopback() && !v4.is_link_local() && !is_virtual_ip_range(v4) {
+                    eprintln!("[NET-SELECT] ⚠️ Fallback adaptör: '{}' → {}", name, v4);
+                    return v4.to_string();
+                }
+            }
+        }
+
+        // PASS 3: Son çare — sanal bile olsa bir IP ver (sadece loopback olmasın)
         for (_, ip) in &netifs {
             if let IpAddr::V4(v4) = ip {
-                if !v4.is_loopback() && !v4.is_link_local() {
+                if !v4.is_loopback() {
                     return v4.to_string();
                 }
             }
         }
     }
-    // Fallback
+
     "127.0.0.1".to_string()
 }
 
@@ -273,6 +358,8 @@ const SUPPORT_URL: &str = "https://www.patreon.com/join/ConsolAktif";
 /// Bu sayede cihazlar internet erişimini kaybetmez
 fn make_pac_direct_body() -> String {
     r#"function FindProxyForURL(url, host) {
+    // BypaxDPI proxy devre dışı — tüm trafik doğrudan çıkış
+    // Bu PAC dosyası otomatik olarak sunulur; ayar değişikliği gerekmez
     return "DIRECT";
 }
 "#
@@ -285,7 +372,7 @@ fn make_pac_body(lan_ip: &str, proxy_port: u16) -> String {
     let proxy = format!("{}:{}", lan_ip, proxy_port);
     format!(
         r#"function FindProxyForURL(url, host) {{
-    // Localhost & plain hostnames → DIRECT (anında, DNS yok)
+    // 1) Localhost & plain hostnames → DIRECT (anında, DNS yok)
     if (isPlainHostName(host) ||
         host === "localhost" ||
         shExpMatch(host, "127.*") ||
@@ -299,6 +386,24 @@ fn make_pac_body(lan_ip: &str, proxy_port: u16) -> String {
         shExpMatch(host, "*.localhost") ||
         shExpMatch(host, "*.internal"))
         return "DIRECT";
+
+    // 2) OS Connectivity Check domainleri → DIRECT
+    //    Bu olmazsa Windows/Android/iOS "internet yok" simgesi gösterir
+    if (shExpMatch(host, "*.msftconnecttest.com") ||
+        shExpMatch(host, "*.msftncsi.com") ||
+        host === "dns.msn.com" ||
+        host === "ipv6.msftconnecttest.com" ||
+        host === "connectivitycheck.gstatic.com" ||
+        host === "connectivitycheck.android.com" ||
+        host === "clients3.google.com" ||
+        host === "play.googleapis.com" ||
+        host === "captive.apple.com" ||
+        host === "gsp1.apple.com" ||
+        host === "connectivitycheck.samsung.com" ||
+        shExpMatch(host, "*.windowsupdate.com") ||
+        shExpMatch(host, "*.delivery.mp.microsoft.com"))
+        return "DIRECT";
+
     return "PROXY {}; DIRECT";
 }}"#,
         proxy
@@ -383,8 +488,16 @@ body {{ background-color: var(--bg-color); color: var(--text-main); line-height:
 
     <header class="header">
         <h1 class="title" data-tr="BypaxDPI'a Bağlan" data-en="Connect to BypaxDPI">BypaxDPI'a Bağlan</h1>
-        <p class="subtitle" data-tr="İnternet trafiğinizi şifreleyin ve engelleri aşın" data-en="Encrypt your traffic and bypass restrictions">İnternet trafiğinizi şifreleyin ve engelleri aşın</p>
+        <p class="subtitle" data-tr="İnternet trafiğinizi şifreleyin ve engelleri aşın" data-en="Bypass Internet Restrictions">İnternet Engellerini Aşın</p>
     </header>
+
+    <div class="notice" style="margin-top: 0; margin-bottom: 20px;">
+        <span class="notice-icon">⚠</span>
+        <div>
+            <strong data-tr="DİKKAT:" data-en="ATTENTION:">DİKKAT:</strong>
+            <span data-tr="Bypax kapatıldıktan sonra YouTube vb. uygulamalarda internet sorunu yaşarsanız (eski önbellek nedeniyle), Wi-Fi bağlantısını kapatıp açmanız yeterlidir." data-en="If apps like YouTube lose internet access after closing Bypax (due to cached connections), simply toggle your Wi-Fi off and on.">Bypax kapatıldıktan sonra YouTube vb. uygulamalarda internet sorunu yaşarsanız (eski önbellek nedeniyle), Wi-Fi bağlantısını kapatıp açmanız yeterlidir.</span>
+        </div>
+    </div>
 
     <div class="card">
         <div class="card-title">
@@ -424,14 +537,6 @@ body {{ background-color: var(--bg-color); color: var(--text-main); line-height:
                 <span data-tr="Artık bağlantınız güvende!" data-en="Your connection is now secure!">Artık bağlantınız güvende!</span>
             </li>
         </ul>
-    </div>
-
-    <div class="notice">
-        <span class="notice-icon">⚠</span>
-        <div>
-            <strong data-tr="ÖNEMLİ:" data-en="IMPORTANT:">ÖNEMLİ:</strong>
-            <span data-tr="Uygulamayı kapattıktan sonra telefonunuzda (örn: WhatsApp) internet sorunu yaşarsanız, telefonunuzun Wi-Fi bağlantısını bir kereliğine kapatıp açmanız yeterlidir. (Cache temizlenir)." data-en="If you experience network issues (e.g., WhatsApp) after closing the app, simply toggle your Wi-Fi off and on once. (Clears cache).">Uygulamayı kapattıktan sonra telefonunuzda (örn: WhatsApp) internet sorunu yaşarsanız, telefonunuzun Wi-Fi bağlantısını bir kereliğine kapatıp açmanız yeterlidir. (Cache temizlenir).</span>
-        </div>
     </div>
 </div>
 
@@ -510,6 +615,21 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// Absolute URL'den path kısmını çıkarır.
+/// "http://192.168.1.5:8787/proxy.pac" → "/proxy.pac"
+/// "http://192.168.1.5:8787/"          → "/"
+/// "/proxy.pac"                         → "/proxy.pac"  (zaten relative)
+fn normalize_path(raw: &str) -> &str {
+    if let Some(pos) = raw.find("://") {
+        let after_scheme = &raw[pos + 3..];
+        if let Some(slash_pos) = after_scheme.find('/') {
+            return &after_scheme[slash_pos..];
+        }
+        return "/";
+    }
+    raw
+}
+
 fn handle_pac_request(
     stream: TcpStream,
     pac_body: &Arc<Mutex<String>>,
@@ -526,28 +646,30 @@ fn handle_pac_request(
         return;
     }
 
-    // TCP RST problemini çözmek için request header'larının TAMI tüketilmelidir.
-    // Sadece 512 bytelık kısmı okunup soket kapatılırsa OS bağlantıyı "Connection Reset" ile koparır
-    // Bu yüzden telefon tarayıcısında QR kodu okutulan setup sayfası hiç açılmamış gözüküyordu.
+    // TCP RST önleme — request header'ları tamamen tüketilmeli
     let mut discard = String::new();
     while let Ok(n) = std::io::BufRead::read_line(&mut reader, &mut discard) {
         if n <= 2 {
             break;
-        } // Boş satır (Header sonu: \r\n veya \n)
+        }
         discard.clear();
     }
 
     let mut stream = reader.into_inner();
 
-    let path = first_line
+    // ✅ FIX: Absolute URL desteği — proxy üzerinden gelen istekleri de doğru parse et
+    let raw_path = first_line
         .split_whitespace()
         .nth(1)
         .unwrap_or("/")
         .split('?')
         .next()
         .unwrap_or("/");
+    let path = normalize_path(raw_path);
+
     let is_get = first_line.to_uppercase().starts_with("GET ");
 
+    // ── 1) Logo ──
     if is_get && path == "/logo" {
         let img = include_bytes!("../icons/128x128.png");
         let hdr = format!(
@@ -560,43 +682,60 @@ fn handle_pac_request(
         return;
     }
 
-    if is_get && path == "/proxy.pac" {
-        // Body'yi bir kez oku — hem hash hem içerik için kullan (TOCTOU ve deadlock riski önlenir)
+    // ── 2) PAC dosyası (/proxy.pac veya /wpad.dat) ──
+    // Bazı senaryolarda tarayıcılar absolute URL (http://ip:port/proxy.pac) olarak gönderebilir.
+    if is_get && (path.ends_with("/proxy.pac") || path.ends_with("/wpad.dat")) {
         let current_body = pac_body
             .lock()
             .map(|b| b.clone())
             .unwrap_or_else(|_| make_pac_direct_body());
         let current_hash = simple_hash(&current_body);
 
+        // Dinamik Cache-Control: PROXY aktifken 60s, DIRECT modda 0
+        let is_direct_mode = !current_body.contains("PROXY");
+        let cache_header = if is_direct_mode {
+            "Cache-Control: no-cache, no-store, must-revalidate, max-age=0"
+        } else {
+            "Cache-Control: max-age=60"
+        };
+
+        let mode_bit: u64 = if is_direct_mode { 1 } else { 0 };
+        let cache_key = current_hash.wrapping_add(mode_bit);
+
         if let Ok(mut cache) = pac_cache.lock() {
-            if cache.body_hash != current_hash || cache.pac_response.is_empty() {
+            if cache.body_hash != cache_key || cache.pac_response.is_empty() {
                 let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/x-ns-proxy-autoconfig\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: max-age=300\r\nContent-Length: {}\r\n\r\n{}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/x-ns-proxy-autoconfig\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n{}\r\nContent-Length: {}\r\n\r\n{}",
+                    cache_header,
                     current_body.len(),
                     current_body
                 );
                 cache.pac_response = response.into_bytes();
-                cache.body_hash = current_hash;
+                cache.body_hash = cache_key;
             }
             let _ = stream.write_all(&cache.pac_response);
         } else {
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/x-ns-proxy-autoconfig\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: max-age=300\r\nContent-Length: {}\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/x-ns-proxy-autoconfig\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n{}\r\nContent-Length: {}\r\n\r\n{}",
+                cache_header,
                 current_body.len(),
                 current_body
             );
             let _ = stream.write_all(response.as_bytes());
         }
         let _ = stream.flush();
-        return;
+        return; // ← ÖNEMLİ: Burada fonksiyondan çık
     }
 
+    // ── 3) GET olmayan istekler ──
     if !is_get {
-        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+        let _ = stream
+            .write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
         let _ = stream.flush();
         return;
     }
 
+    // ── 4) HTML kurulum sayfası (/) veya 404 ──
     let (status, content_type, body) = if path == "/" || path.is_empty() {
         (
             "200 OK",
@@ -608,7 +747,7 @@ fn handle_pac_request(
     };
 
     let response = format!(
-        "HTTP/1.1 {}\r\nContent-Type: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: max-age=300\r\nContent-Length: {}\r\n\r\n{}",
+        "HTTP/1.1 {}\r\nContent-Type: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-cache\r\nContent-Length: {}\r\n\r\n{}",
         status,
         content_type,
         body.len(),
@@ -782,10 +921,8 @@ fn start_pac_server(
         while !shutdown.load(Ordering::Relaxed) {
             match listener.accept() {
                 Ok((stream, _)) => {
-                    // P1-FIX: Eşzamanlı bağlantı limiti — DoS koruması
                     let current = active_connections.load(Ordering::Relaxed);
                     if current >= MAX_PAC_CONNECTIONS {
-                        // Limit aşıldı — bağlantıyı hemen kapat
                         drop(stream);
                         continue;
                     }
@@ -795,8 +932,8 @@ fn start_pac_server(
                     let cache = Arc::clone(&pac_cache_arc);
                     let url = pac_url_for_thread.clone();
                     let conn_counter = Arc::clone(&active_connections);
-                    // Her bağlantıyı ayrı thread'de işle
                     thread::spawn(move || {
+                        let _ = stream.set_nonblocking(false);
                         let _ = stream.set_nodelay(true);
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                         let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
@@ -805,7 +942,8 @@ fn start_pac_server(
                     });
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(5));
+                    // ✅ 5ms → 50ms: CPU wake-up %90 azalır, PAC latency hâlâ imperceptible
+                    thread::sleep(Duration::from_millis(50));
                 }
                 Err(_) => {}
             }
@@ -828,19 +966,36 @@ fn stop_pac_server(state: tauri::State<'_, PacServerState>) -> Result<(), String
         *body = make_pac_direct_body();
     }
 
+    // ✅ P0-FIX: Cache'i hemen invalidate et
+    if let Ok(mut cache) = state.pac_cache.lock() {
+        cache.body_hash = 0;
+        cache.pac_response.clear();
+    }
+
     #[cfg(target_os = "windows")]
     manage_firewall_rules(false, 0, 0);
 
     Ok(())
 }
 
-/// Uygulama tamamen çıkarken PAC sunucusunu gerçekten durdur
+/// Uygulama tamamen çıkarken PAC sunucusunu GÜVENLİ şekilde durdur.
+/// İki aşamalı kapanış: önce DIRECT'e geç → cihazların çekmesini bekle → sonra kapat
 fn force_stop_pac_server(state: &PacServerState) {
-    // Önce body'yi DIRECT yap (güvenlik için)
+    // ═══ PHASE 1: DIRECT moduna geç ═══
     if let Ok(mut body) = state.pac_body.lock() {
         *body = make_pac_direct_body();
     }
-    // Sonra shutdown sinyali gönder
+    if let Ok(mut cache) = state.pac_cache.lock() {
+        cache.body_hash = 0;
+        cache.pac_response.clear();
+    }
+
+    eprintln!("[PAC-SHUTDOWN] Phase 1: DIRECT mode aktif, cihazların çekmesi bekleniyor...");
+
+    // ═══ PHASE 2: Grace Period ═══
+    std::thread::sleep(Duration::from_millis(1500));
+
+    // ═══ PHASE 3: Sunucuyu kapat ═══
     state.shutdown.store(true, Ordering::Relaxed);
     if let Ok(mut guard) = state.join_handle.lock() {
         let _ = guard.take();
@@ -848,6 +1003,8 @@ fn force_stop_pac_server(state: &PacServerState) {
 
     #[cfg(target_os = "windows")]
     manage_firewall_rules(false, 0, 0);
+
+    eprintln!("[PAC-SHUTDOWN] Phase 3: PAC sunucusu kapatıldı");
 }
 
 #[derive(serde::Serialize)]
@@ -1174,14 +1331,20 @@ fn startup_proxy_cleanup() -> Result<bool, String> {
 
             // Tarayıcılara bildir
             notify_proxy_change();
+
+            // ✅ Sadece dirty shutdown'da firewall temizle
+            manage_firewall_rules(false, 0, 0);
         }
 
-        // Sentinel dosyasını temizle
         let _ = std::fs::remove_file(&sentinel);
-        eprintln!("[STARTUP] ✅ Orphaned proxy settings cleaned successfully");
+        eprintln!("[STARTUP] ✅ Orphaned proxy + firewall rules cleaned");
 
-        return Ok(true); // Dirty state temizlendi
+        return Ok(true);
     }
+
+    // ✅ FIX: Temiz başlangıçta firewall temizleme YAPMA
+    // Eski kod: manage_firewall_rules(false, 0, 0) — autoConnect ile race condition yaratıyordu
+    // Sentinel yoksa zaten önceki oturum düzgün kapanmış, firewall kuralları da temizlenmiş demektir
 
     Ok(false) // Temiz başlangıç
 }
@@ -1350,9 +1513,20 @@ pub fn run() {
 
                 // LAYER 2: Window close cleanup
                 if let Some(window) = app.get_webview_window("main") {
-                    window.on_window_event(|event| {
+                    let app_handle = app.handle().clone();
+                    window.on_window_event(move |event| {
                         if let tauri::WindowEvent::Destroyed = event {
                             let _ = clear_system_proxy();
+                            // ✅ P2-FIX: PAC'i de DIRECT'e geçir
+                            if let Some(pac_state) = app_handle.try_state::<PacServerState>() {
+                                if let Ok(mut body) = pac_state.pac_body.lock() {
+                                    *body = make_pac_direct_body();
+                                }
+                                if let Ok(mut cache) = pac_state.pac_cache.lock() {
+                                    cache.body_hash = 0;
+                                    cache.pac_response.clear();
+                                }
+                            }
                         }
                     });
                 }
@@ -1390,8 +1564,9 @@ pub fn run() {
                 let _ = clear_system_proxy();
                 if let Some(state) = app_handle.try_state::<PacServerState>() {
                     force_stop_pac_server(&state);
+                    // force_stop_pac_server içinde 1.5s grace period var
+                    // Ek sleep'e gerek yok
                 }
-                std::thread::sleep(std::time::Duration::from_millis(200));
             }
         });
 }
