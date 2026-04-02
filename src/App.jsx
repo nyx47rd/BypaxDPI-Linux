@@ -7,7 +7,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import { getTranslations } from "./i18n";
 import { DNS_MAP, DOH_MAP, URLS, APP, RETRY_DELAYS, DPI_TIMEOUTS } from "./constants";
-import { ISP_PROFILES, buildEngineArgs, VALID_CHUNK_SIZES, VALID_DPI_METHODS, DEFAULT_CHUNKS } from "./profiles";
+import { ISP_PROFILES, VALID_CHUNK_SIZES, VALID_DPI_METHODS, DEFAULT_CHUNKS } from "./profiles";
 
 // Re-add missing imports
 import DOMPurify from "dompurify";
@@ -217,9 +217,14 @@ function App() {
 
   // DNS_MAP ve DOH_MAP artık component dışında tanımlı (yukarıda)
 
-  const updateConfig = (key, value) => {
+  const updateConfig = (keyOrObj, value) => {
     setConfig((prev) => {
-      const newConfig = { ...prev, [key]: value };
+      let newConfig;
+      if (typeof keyOrObj === 'object' && keyOrObj !== null) {
+        newConfig = { ...prev, ...keyOrObj };
+      } else {
+        newConfig = { ...prev, [keyOrObj]: value };
+      }
       // P1-FIX: Base64 kodlaması kaldırıldı, plaintext validasyonlu yazılıyor
       localStorage.setItem("bypax_config", JSON.stringify(newConfig));
       return newConfig;
@@ -535,8 +540,10 @@ function App() {
     }
 
     if (childProcess.current) {
-        isStartingEngine.current = false;
-        return;
+        try {
+          await childProcess.current.kill();
+        } catch (_) {}
+        childProcess.current = null;
     }
     await clearProxy(true);
 
@@ -1260,8 +1267,8 @@ function App() {
             }
             await clearProxy(true);
             
-            // ✅ Animasyonun görünmesi ve PAC grace period için en az 1.5s bekle
-            await new Promise((resolve) => setTimeout(resolve, 1000));
+            // ✅ Animasyonun görünmesi ve PAC grace period için bekle
+            await new Promise((resolve) => setTimeout(resolve, 500));
           } catch (e) {
             console.error("Cleanup failed:", e);
           }
@@ -1365,8 +1372,8 @@ function App() {
         } catch (_) {}
         await clearProxy(true);
         
-        // ✅ Animasyonun görünmesi ve PAC grace period için en az 1.5s bekle
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        // ✅ Animasyonun görünmesi ve PAC grace period için bekle
+        await new Promise((resolve) => setTimeout(resolve, 500));
       } catch (e) {
         console.error("Cleanup failed:", e);
       }

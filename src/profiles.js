@@ -40,8 +40,8 @@ export const ISP_PROFILES = [
   },
   { 
     id: 'mid', 
-    mode: '2', 
-    chunk: 1, 
+    mode: '1', 
+    chunk: 2, 
     color: '#60a5fa', 
     bg: 'rgba(96, 165, 250, 0.1)',
     icon: '🛡️',
@@ -162,56 +162,4 @@ export const VALID_DPI_METHODS = ['0', '1', '2'];
 // t        → Çeviri objesi
 // ─────────────────────────────────────────────────────────────────
 
-export function buildEngineArgs({ config, hasDriver, port, dnsIP, currentDns, dohUrl, addLog, t }) {
-  const args = [
-    "--addr", "0.0.0.0",
-    "--port", String(port),
-    "--debug",
-  ];
 
-  // IPv4 Zorlaması
-  if (config.ipv4Only !== false) {
-    args.push("--dns-qtype", "ipv4");
-  } else {
-    args.push("--dns-qtype", "all");
-  }
-
-  // DNS ayarı
-  if (currentDns === "system" || !dnsIP) {
-    args.push("--dns-mode", "system");
-  } else if (dohUrl) {
-    args.push("--dns-mode", "https", "--dns-https-url", dohUrl);
-  } else {
-    args.push("--dns-addr", `${dnsIP}:53`, "--dns-mode", "udp");
-  }
-
-  // DPI Bypass Modu
-  const dpiMethod = config.dpiMethod || "1";
-  const userChunk = VALID_CHUNK_SIZES.includes(Number(config.httpsChunkSize))
-    ? String(config.httpsChunkSize)
-    : String(DEFAULT_CHUNKS[dpiMethod] || 2);
-
-  if (dpiMethod === "2") {
-    // Güçlü Mod
-    const advancedBypass = config.advancedBypass !== false;
-    if (hasDriver && advancedBypass) {
-      args.push("--https-split-mode", "chunk", "--https-chunk-size", "1", "--https-fake-count", "3");
-      addLog?.(t?.logStrongFake || "🚀 Güçlü Mod: Fake Paket (3) aktif.", "success");
-    } else {
-      args.push("--https-split-mode", "chunk", "--https-chunk-size", "1");
-      if (!hasDriver) {
-        addLog?.(t?.logStrongNoDriver || "⚠️ Güçlü Mod: Sürücü yok, sadece Chunk-1 aktif.", "warn");
-      } else {
-        addLog?.(t?.logStrongChunkOnly || "🛡️ Güçlü Mod: Chunk-1 aktif.", "info");
-      }
-    }
-  } else if (dpiMethod === "1") {
-    // Dengeli Mod
-    args.push("--https-split-mode", "chunk", "--https-chunk-size", userChunk);
-  } else {
-    // Turbo Mod
-    args.push("--https-split-mode", "sni");
-  }
-
-  return { args, dpiMethod };
-}

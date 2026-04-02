@@ -1229,8 +1229,8 @@ fn check_admin() -> bool {
 }
 
 fn perform_app_exit(app: &tauri::AppHandle) {
-    let _ = clear_system_proxy();
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    // clear_system_proxy zaten RunEvent::ExitRequested'da çağrılacak
+    // Burada tekrar çağırma — app.exit() ExitRequested tetikler
     app.exit(0);
 }
 
@@ -1563,9 +1563,23 @@ pub fn run() {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let _ = clear_system_proxy();
                 if let Some(state) = app_handle.try_state::<PacServerState>() {
-                    force_stop_pac_server(&state);
-                    // force_stop_pac_server içinde 1.5s grace period var
-                    // Ek sleep'e gerek yok
+                    // Grace period'u kısalt — App.jsx zaten 1.5s (şimdi 0.5s) bekledi
+                    // DIRECT'e geç ama uzun bekleme
+                    if let Ok(mut body) = state.pac_body.lock() {
+                        *body = make_pac_direct_body();
+                    }
+                    if let Ok(mut cache) = state.pac_cache.lock() {
+                        cache.body_hash = 0;
+                        cache.pac_response.clear();
+                    }
+                    // 500ms yeterli — cihazlar genelde 200ms içinde PAC'i çeker
+                    std::thread::sleep(Duration::from_millis(500));
+                    state.shutdown.store(true, Ordering::Relaxed);
+                    if let Ok(mut guard) = state.join_handle.lock() {
+                        let _ = guard.take();
+                    }
+                    #[cfg(target_os = "windows")]
+                    manage_firewall_rules(false, 0, 0);
                 }
             }
         });

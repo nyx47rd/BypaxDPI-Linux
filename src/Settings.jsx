@@ -351,7 +351,9 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
                       desc: t[descKey] || '',
                       icon: ICON_MAP[isp.id] || <Globe size={18} />,
                     };
-                    const isApplied = config.selectedIspProfile === ispData.id;
+                    const isApplied = config.selectedIspProfile === ispData.id && 
+                                     config.dpiMethod === ispData.mode && 
+                                     Number(config.httpsChunkSize) === Number(ispData.chunk);
                     const isExpanded = expandedISP === ispData.id;
 
                     return (
@@ -419,9 +421,11 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
                                 {!isApplied ? (
                                   <button
                                     onClick={() => {
-                                      updateConfig('dpiMethod', ispData.mode);
-                                      updateConfig('httpsChunkSize', ispData.chunk);
-                                      updateConfig('selectedIspProfile', ispData.id);
+                                      updateConfig({
+                                        dpiMethod: ispData.mode,
+                                        httpsChunkSize: ispData.chunk,
+                                        selectedIspProfile: ispData.id
+                                      });
                                     }}
                                     style={{ 
                                       background: ispData.color, color: '#000', border: 'none', 
@@ -458,7 +462,7 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
                     <div 
                       className={`v2-item hover-effect ${config.dpiMethod === '0' ? 'v2-selected' : ''}`}
                       style={{ background: config.dpiMethod === '0' ? 'rgba(234, 179, 8, 0.1)' : 'transparent', opacity: config.dpiMethod === '0' ? 1 : 0.5, cursor: 'pointer', transition: 'all 0.2s ease' }}
-                      onClick={() => { updateConfig('dpiMethod', '0'); updateConfig('httpsChunkSize', 4); }}
+                      onClick={() => { updateConfig({ dpiMethod: '0', httpsChunkSize: 4, selectedIspProfile: 'custom' }); }}
                     >
                       <div className="v2-icon yellow" style={{ background: config.dpiMethod === '0' ? 'rgba(234, 179, 8, 0.2)' : '' }}>
                         <Activity size={20} className={config.dpiMethod === '0' ? 'active-icon' : ''} />
@@ -478,7 +482,7 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
                     <div 
                       className={`v2-item hover-effect ${config.dpiMethod === '1' ? 'v2-selected' : ''}`}
                       style={{ background: config.dpiMethod === '1' ? 'rgba(34, 197, 94, 0.1)' : 'transparent', opacity: config.dpiMethod === '1' ? 1 : 0.5, cursor: 'pointer', transition: 'all 0.2s ease' }}
-                      onClick={() => { updateConfig('dpiMethod', '1'); updateConfig('httpsChunkSize', 2); }}
+                      onClick={() => { updateConfig({ dpiMethod: '1', httpsChunkSize: 2, selectedIspProfile: 'custom' }); }}
                     >
                       <div className="v2-icon green" style={{ background: config.dpiMethod === '1' ? 'rgba(34, 197, 94, 0.2)' : '' }}>
                         <Zap size={20} className={config.dpiMethod === '1' ? 'active-icon' : ''} />
@@ -503,7 +507,7 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
                         cursor: 'pointer',
                         transition: 'all 0.2s ease'
                       }}
-                      onClick={() => { updateConfig('dpiMethod', '2'); updateConfig('httpsChunkSize', 1); }}
+                      onClick={() => { updateConfig({ dpiMethod: '2', httpsChunkSize: 1, selectedIspProfile: 'custom' }); }}
                     >
                       <div className="v2-icon blue" style={{ background: config.dpiMethod === '2' ? 'rgba(59, 130, 246, 0.2)' : '' }}>
                         <Shield size={20} className={config.dpiMethod === '2' ? 'active-icon' : ''} />
@@ -651,7 +655,7 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
                               <button
                                 key={opt.value}
                                 type="button"
-                                onClick={() => updateConfig('httpsChunkSize', opt.value)}
+                                onClick={() => updateConfig({ httpsChunkSize: opt.value, selectedIspProfile: 'custom' })}
                                 style={{
                                   flex: 1, height: '32px', border: 'none', margin: '0 4px', borderRadius: '6px',
                                   background: isSelected ? accentBg : 'rgba(255, 255, 255, 0.03)',
