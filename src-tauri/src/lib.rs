@@ -978,34 +978,7 @@ fn stop_pac_server(state: tauri::State<'_, PacServerState>) -> Result<(), String
     Ok(())
 }
 
-/// Uygulama tamamen çıkarken PAC sunucusunu GÜVENLİ şekilde durdur.
-/// İki aşamalı kapanış: önce DIRECT'e geç → cihazların çekmesini bekle → sonra kapat
-fn force_stop_pac_server(state: &PacServerState) {
-    // ═══ PHASE 1: DIRECT moduna geç ═══
-    if let Ok(mut body) = state.pac_body.lock() {
-        *body = make_pac_direct_body();
-    }
-    if let Ok(mut cache) = state.pac_cache.lock() {
-        cache.body_hash = 0;
-        cache.pac_response.clear();
-    }
 
-    eprintln!("[PAC-SHUTDOWN] Phase 1: DIRECT mode aktif, cihazların çekmesi bekleniyor...");
-
-    // ═══ PHASE 2: Grace Period ═══
-    std::thread::sleep(Duration::from_millis(1500));
-
-    // ═══ PHASE 3: Sunucuyu kapat ═══
-    state.shutdown.store(true, Ordering::Relaxed);
-    if let Ok(mut guard) = state.join_handle.lock() {
-        let _ = guard.take();
-    }
-
-    #[cfg(target_os = "windows")]
-    manage_firewall_rules(false, 0, 0);
-
-    eprintln!("[PAC-SHUTDOWN] Phase 3: PAC sunucusu kapatıldı");
-}
 
 #[derive(serde::Serialize)]
 struct ConfigResponse {
