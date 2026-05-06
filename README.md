@@ -1,3 +1,24 @@
+<p align="center">
+  <img src="images/bypax-logo.png" width="128" alt="BypaxDPI Logo">
+</p>
+
+<h1 align="center">BypaxDPI</h1>
+
+<p align="center">
+  <b>Discord ve internet erişim engellerini aşmak için tasarlanmış; askeri düzeyde çökmeye karşı dayanıklı (Anti-Crash), modern ve çok yönlü Yerel Proxy & DPI Bypass aracı.</b>
+</p>
+
+---
+<p align="center">
+
+[![BypaxDPI İndir!](https://img.shields.io/badge/⬇%20İndir-BypaxDPI-107C10?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/BypaxDPI/BypaxDPI-Windows/releases)
+[![Version v1.0.0 (Son Sürüm)](https://img.shields.io/badge/Version-1.0.0%20Latest-0078D4?style=for-the-badge&logo=github&logoColor=white)](https://github.com/BypaxDPI/BypaxDPI-Windows/releases/)
+
+</p>
+
+---
+
+
 # 🚀 BypaxDPI v1.0.0 (Enterprise-Ready)
 
 > **Discord ve internet erişim engellerini aşmak için tasarlanmış; askeri düzeyde çökmeye karşı dayanıklı (Anti-Crash), modern ve çok yönlü Yerel Proxy & DPI Bypass aracı.**
@@ -6,6 +27,15 @@
 [![Architecture](https://img.shields.io/badge/Architecture-x64-green.svg)](https://www.microsoft.com/windows)
 [![Security](https://img.shields.io/badge/Security-Audited-success.svg)](#-siber-güvenlik-ve-kurumsal-standartlar-enterprise-grade)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+---
+
+## 📸 Ekran Görüntüleri
+
+<div align="center">
+  <img src="images/1.jpg" alt="BypaxDPI Ekran Görüntüsü 1" width="35%">
+  <img src="images/2.jpg" alt="BypaxDPI Ekran Görüntüsü 2" width="35%">
+</div>
 
 ---
 
@@ -32,8 +62,21 @@ BypaxDPI, baştan aşağı Rust (Tauri v2) altyapısıyla kodlanmış olup **Zom
 
 ## ✨ Özellikler
 
-- **Sistem Geneli Akıllı Proxy**: Windows sistem proxy ayarlarını otomatik yönetir, böylece Discord, Spotify, tarayıcılar ve diğer uygulamalar internet sansürünü tamamen aşar.
-- **LAN Paylaşımı (WiFi ile Tüm Eve Dağıtım)**: Kendi içindeki Asenkron Limitli PAC Sunucusu sayesinde, bilgisayarınız üzerinden telefon, tablet veya konsolunuzu (Ağ Ayarları -> Proxy -> Otomatik URL girerek veya QR Kod izleyerek) engelsiz ağa bağlayabilirsiniz.
+- **Sistem Geneli Akıllı Proxy**: Windows sistem proxy ayarlarını otomatik yönetir, böylece Discord,Roblox ve tarayıcılar ve diğer uygulamalar internet sansürünü tamamen aşar.
+
+<table>
+  <tr>
+    <td width="35%" align="center">
+      <img src="images/3.jpg" alt="LAN Paylaşımı (QR Kod)" width="60%">
+    </td>
+    <td width="50%" valign="middle">
+      <b>📱 LAN Paylaşımı (WiFi ile Tüm Eve Dağıtım)</b><br><br>
+      Kendi içindeki Asenkron Limitli PAC Sunucusu sayesinde, bilgisayarınız üzerinden telefon, tablet veya konsolunuzu engelsiz ağa bağlayabilirsiniz.<br><br>
+      <i>Ağ Ayarları ➔ Proxy ➔ Otomatik URL girerek veya <b>QR Kod okutarak</b> anında bağlanın.</i>
+    </td>
+  </tr>
+</table>
+
 - **DoH (DNS over HTTPS) Şifrelemesi**: ISP'lerin standart Port 53 DNS sorgularını avlamasını önlemek için Cloudflare, Google, AdGuard, Quad9, OpenDNS üzerinden trafiklerinizi Web (HTTPS) katmanında maskeler.
 - **Canlı Soft-Restart (DPI Yenileme)**: Eski uygulamalar gibi DNS/Ayar değiştirdiğinizde uygulamayı söküp takmanız gerekmez. BypaxDPI canlı olarak yumuşak restart (Soft-Restart) atarak bağlantıyı yeni DNS protokolüne taşır.
 - **Modern Fluent Arayüz**: Eski çağ siyah konsolların aksine; BypaxDPI Windows 11 Fluent UI kurallarına göre tasarlanmış React/Tailwind bir arayüz, Canlı Log Monitörü ve Çoklu Dil desteğine sahiptir.
@@ -77,7 +120,7 @@ BypaxDPI, kod düzeyindedir ve tamamen "0 Zafiyet" denetiminden (Security Audit)
 
 ## 🔧 Nasıl Çalışır? (Kurulum)
 
-1. **İndirin**: Projenin [Releases sayfası](https://github.com/MuratGuelr/bypaxdpi-app/releases) bağlantısına gidip en güncel versiyonun `.exe / .msi` dosyasını bilgisayarınıza indirin.
+1. **İndirin**: Projenin [Releases sayfası](https://github.com/BypaxDPI/BypaxDPI-Windows/releases) bağlantısına gidip en güncel versiyonun `.exe / .msi` dosyasını bilgisayarınıza indirin.
 2. **Kurun**: Uygulamayı çalıştırın. Kendi yerleşik (gömülü) motorunu kullanacağı için WinPcap vb. hiçbir ek program / sürücü yüklemenize **asla** gerek yoktur.
 3. **Açın ve Tıklayın**: İsterseniz Ayarlar (Dişli İkonu) sekmesinden *DoH DNS*, *Güçlü Mod* ve *LAN Paylaşımı (Telefon)* özelliklerini zevkinize göre açıp; ana ekrandaki **BAĞLAN** tuşuna dokunmanız yeterlidir. Ekranda **Güvenli** yazdığı an Discord ve ötesindeki dünyaya aitsiniz.
 
@@ -88,7 +131,7 @@ BypaxDPI, kod düzeyindedir ve tamamen "0 Zafiyet" denetiminden (Security Audit)
 Bu proje açık kaynaklı, tamamen hür bir topluluk girişimidir. BypaxDPI'ın yaşaması, donanımlarının güncellenmesi için bana kahve ısmarlamak isterseniz:
 
 - **GitHub Sponsor:** [![Sponsor](https://img.shields.io/static/v1?label=Sponsor&message=%E2%9D%A4&logo=GitHub&color=%23fe8e86)](https://github.com/sponsors/MuratGuelr)
-- **Patreon:** [![Patreon](https://img.shields.io/badge/MuratGuelr-purple?logo=patreon&label=Patreon)](https://www.patreon.com/posts/splitwire-for-v1-140359525)
+- **Patreon:** [![Patreon](https://img.shields.io/badge/MuratGuelr-purple?logo=patreon&label=Patreon)](https://www.patreon.com/join/ConsolAktif)
 
 **Geliştirici:** Crafted with 💖 & Rust by [ConsolAktif](https://github.com/MuratGuelr)
 

@@ -116,6 +116,7 @@ const translations = {
     logInternetLost: 'İnternet bağlantısı kesildi!',
     logPortRetry: (count) => `Port çakışması, yeni port deneniyor... (${count}/20)`,
     logNoPort: 'Uygun port bulunamadı.',
+    logWinHttpEnabled: 'Oyun Modu (WinHTTP) proxy tüneli uygulandı.',
     logWpcapMissing: 'SpoofDPI, wpcap.dll kütüphanesini bulamadı. Lütfen Npcap veya WinPcap kurun ve ardından uygulamayı yeniden başlatın.',
     logAntivirusWarning: 'Windows Defender veya antivirüs yazılımınız \'bypax-proxy.exe\' dosyasını engellemiş olabilir. Lütfen dosyayı antivirüs dışlama listesine (exclusion) ekleyin.',
 
@@ -229,6 +230,8 @@ const translations = {
     sectionExtraNetwork: 'EKSTRA AĞ AYARLARI',
     ipv4ForceTitle: 'IPv4\'e Zorla (Önerilen)',
     ipv4ForceDesc: 'Sonsuz yükleme ve Zaman Aşımı (Timeout) hatalarını engeller.',
+    winHttpForceTitle: 'Oyun Modu (WinHTTP Proxy)',
+    winHttpForceDesc: 'C++ ile yazılmış masaüstü oyunların ve servislerin arka planda DPI engelini aşmasını sağlar.',
 
     // Gelişmiş (Npcap)
     sectionAdvancedNpcap: 'GELİŞMİŞ AYARLAR',
@@ -399,6 +402,7 @@ const translations = {
     logInternetLost: 'Internet connection lost!',
     logPortRetry: (count) => `Port conflict, trying new port... (${count}/20)`,
     logNoPort: 'No available port found.',
+    logWinHttpEnabled: 'Game Mode (WinHTTP) proxy tunnel applied.',
     logWpcapMissing: 'SpoofDPI could not find wpcap.dll. Please install Npcap or WinPcap, then restart the application.',
     logAntivirusWarning: 'Windows Defender or your antivirus software may have blocked \'bypax-proxy.exe\'. Please add the file to your antivirus exclusion list.',
 
@@ -512,6 +516,8 @@ const translations = {
     sectionExtraNetwork: 'EXTRA NETWORK SETTINGS',
     ipv4ForceTitle: 'Force IPv4 (Recommended)',
     ipv4ForceDesc: 'Prevents infinite loading and timeout errors.',
+    winHttpForceTitle: 'Game Mode (WinHTTP Proxy)',
+    winHttpForceDesc: 'Forces C++ desktop games and background services to bypass DPI through the proxy.',
 
     // Advanced (Npcap)
     sectionAdvancedNpcap: 'ADVANCED SETTINGS',

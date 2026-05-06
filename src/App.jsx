@@ -214,6 +214,8 @@ function App() {
   const prevChunkSizeRef = useRef(config.httpsChunkSize ?? 4);
   const prevSelectedDnsRef = useRef(config.selectedDns);
   const prevDnsModeRef = useRef(config.dnsMode);
+  const prevEnableWinhttpRef = useRef(config.enableWinhttp !== false);
+  const prevIpv4OnlyRef = useRef(config.ipv4Only !== false);
 
   // DNS_MAP ve DOH_MAP artık component dışında tanımlı (yukarıda)
 
@@ -525,6 +527,7 @@ function App() {
     try {
       configData = await invoke("get_sidecar_config", {
         allowLanSharing: configRef.current.lanSharing || false,
+        enableGameMode: configRef.current.enableWinhttp !== false,
       });
       port = configData.port;
       bindAddr = configData.bind_address;
@@ -750,11 +753,14 @@ function App() {
           setCurrentPort(port);
           currentPortRef.current = port;
           try {
-            await invoke("set_system_proxy", { port });
+            await invoke("set_system_proxy", { port, enableWinhttp: configRef.current.enableWinhttp !== false });
             addLog(t.logProxySet(port), "success", {
               i18nKey: "logProxySet",
               i18nParams: [port],
             });
+            if (configRef.current.enableWinhttp !== false) {
+              addLog(t.logWinHttpEnabled, "warn", { i18nKey: "logWinHttpEnabled" });
+            }
           } catch (err) {
             addLog(t.logProxySetError(err), "error", {
               i18nKey: "logProxySetError",
@@ -873,6 +879,20 @@ function App() {
           })();
           updateTrayTooltip("disconnected"); // ✅ Bağlantı koptu (geçici)
 
+          // ✅ Hızlı crash tespiti: Güçlü Mod + Fake Paket crash’i ise Npcap sorunu (Ölümcül hatayı override et)
+          const isStrongWithFake = configRef.current.dpiMethod === '2' && configRef.current.advancedBypass !== false;
+          if (fatalErrorRef.current && isStrongWithFake) {
+            addLog(t.logNpcapFallback || "⚠️ Npcap sürücüsü yanıt vermiyor. Gelişmiş bypass kapatılıp tekrar deneniyor...", "warn");
+            configRef.current = { ...configRef.current, advancedBypass: false };
+            setConfig(prev => ({ ...prev, advancedBypass: false }));
+            localStorage.setItem('bypax_config', JSON.stringify({ ...configRef.current, advancedBypass: false }));
+            retryCount.current = 0; // Reset retry
+            fatalErrorRef.current = false; // Hatayı temizle, tekrar denesin
+            setIsProcessing(true);
+            attemptReconnect();
+            return;
+          }
+
           // ✅ Otomatik yeniden bağlanma kontrol
           const autoReconnectEnabled =
             configRef.current.autoReconnect !== false; // undefined veya true ise açık
@@ -880,24 +900,10 @@ function App() {
           const shouldReconnect =
             autoReconnectEnabled && // Ayarda açık mı?
             !userIntentDisconnect.current && // Kullanıcı kasıtlı kapatmadı mı?
-            !fatalErrorRef.current && // Ölümcül hata yok mu? (örn. wpcap.dll eksik)
+            !fatalErrorRef.current && // Ölümcül hata yok mu?
             hadActiveProcess; // Process çalışıyor muydu?
 
           if (shouldReconnect) {
-            // ✅ Hızlı crash tespiti: Güçlü Mod + Fake Paket crash’i ise Npcap sorunu
-            const isStrongWithFake = configRef.current.dpiMethod === '2' && configRef.current.advancedBypass !== false;
-            if (isStrongWithFake && retryCount.current >= 2) {
-              // Npcap çalışmıyor — gelişmiş bypass’ı otomatik kapat ve tekrar dene
-              addLog(t.logNpcapFallback || "⚠️ Npcap sürücüsü yanıt vermiyor. Gelişmiş bypass kapatılıp tekrar deneniyor...", "warn");
-              configRef.current = { ...configRef.current, advancedBypass: false };
-              setConfig(prev => ({ ...prev, advancedBypass: false }));
-              localStorage.setItem('bypax_config', JSON.stringify({ ...configRef.current, advancedBypass: false }));
-              retryCount.current = 0; // Reset retry — yeni modda tekrar dene
-              setIsProcessing(true);
-              attemptReconnect();
-              return;
-            }
-
             addLog(`🔄 ${t.logAutoReconnect}`, "info", {
               i18nKey: "logAutoReconnect",
             });
@@ -940,7 +946,7 @@ function App() {
           currentPortRef.current = port;
 
           try {
-            await invoke("set_system_proxy", { port: port });
+            await invoke("set_system_proxy", { port: port, enableWinhttp: configRef.current.enableWinhttp !== false });
           } catch (err) {
             addLog(t.logProxySetError(err), "error", {
               i18nKey: "logProxySetError",
@@ -1129,17 +1135,23 @@ function App() {
   const [isApplyingSettings, setIsApplyingSettings] = useState(false);
   useEffect(() => {
     const chunkSize = config.httpsChunkSize ?? 4;
+    const winhttp = config.enableWinhttp !== false;
+    const ipv4 = config.ipv4Only !== false;
     if (
       prevDpiMethodRef.current === config.dpiMethod &&
       prevChunkSizeRef.current === chunkSize &&
       prevSelectedDnsRef.current === config.selectedDns &&
-      prevDnsModeRef.current === config.dnsMode
+      prevDnsModeRef.current === config.dnsMode &&
+      prevEnableWinhttpRef.current === winhttp &&
+      prevIpv4OnlyRef.current === ipv4
     )
       return;
     prevDpiMethodRef.current = config.dpiMethod;
     prevChunkSizeRef.current = chunkSize;
     prevSelectedDnsRef.current = config.selectedDns;
     prevDnsModeRef.current = config.dnsMode;
+    prevEnableWinhttpRef.current = winhttp;
+    prevIpv4OnlyRef.current = ipv4;
 
     if (!isConnected || isRestartingDpi.current) return;
     isRestartingDpi.current = true;
@@ -1169,7 +1181,7 @@ function App() {
       setIsProcessing(true);
       startEngine(0);
     }, 2500); // Portun serbest kalması için (SpoofDPI 1.2.1 / TIME_WAIT)
-  }, [config.dpiMethod, config.httpsChunkSize, config.selectedDns, config.dnsMode, isConnected]);
+  }, [config.dpiMethod, config.httpsChunkSize, config.selectedDns, config.dnsMode, config.enableWinhttp, config.ipv4Only, isConnected]);
 
   useEffect(() => {
     // Initial cleanup on mount

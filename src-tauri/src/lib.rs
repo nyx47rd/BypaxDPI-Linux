@@ -36,13 +36,13 @@ mod registry {
         key.get_value(name).ok()
     }
 
-    pub fn set_proxy(port: u16) -> Result<(), String> {
+    pub fn set_proxy(proxy_addr: &str, port: u16) -> Result<(), String> {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let (key, _) = hkcu
             .create_subkey(INTERNET_SETTINGS)
             .map_err(|e| format!("Registry açılamadı: {}", e))?;
 
-        key.set_value("ProxyServer", &format!("127.0.0.1:{}", port))
+        key.set_value("ProxyServer", &format!("{}:{}", proxy_addr, port))
             .map_err(|e| format!("ProxyServer: {}", e))?;
         key.set_value("ProxyEnable", &1u32)
             .map_err(|e| format!("ProxyEnable: {}", e))?;
@@ -84,9 +84,43 @@ mod registry {
             // Windows Update
             "*.windowsupdate.com",
             "*.delivery.mp.microsoft.com",
+            // ── Oyun & Uygulama Launcher/Updater Bypass ──
+            // Bu domainler DPI ile engellenmez ama bazı uygulamaların C++ HTTP
+            // istemcileri SpoofDPI'nin TLS parçalamasıyla uyumsuz çalışabilir.
+            // Bypass ile direkt bağlansınlar, oyun/uygulama trafiği proxy'den geçsin.
+            //
+            // Steam
+            "*.steamcontent.com",
+            "*.steamstatic.com",
+            "clientconfig.akamai.steamstatic.com",
+            "*.cm.steampowered.com",
+            // Epic Games
+            "*.epicgames.com",
+            "*.unrealengine.com",
+            "download.epicgames.com",
+            "launcher-public-service-prod06.ol.epicgames.com",
+            // Riot Games (LoL, Valorant)
+            "*.riotgames.com",
+            "*.leagueoflegends.com",
+            "riotgames-update.akamaized.net",
+            // EA / Origin
+            "*.ea.com",
+            "*.origin.com",
+            // Blizzard / Battle.net
+            "*.blizzard.com",
+            "*.battle.net",
+            "blzddist1-a.akamaihd.net",
+            // Ubisoft
+            "*.ubisoft.com",
+            "*.ubi.com",
+            // Microsoft / Xbox
+            "*.xboxlive.com",
+            "*.xbox.com",
+            "*.microsoft.com",
+            // Genel CDN'ler (installer/updater dağıtımı)
+            "*.cachefly.net",
         ]
         .join(";");
-
         key.set_value("ProxyOverride", &proxy_override)
             .map_err(|e| format!("ProxyOverride: {}", e))?;
         Ok(())
@@ -102,6 +136,7 @@ mod registry {
             .map_err(|e| format!("ProxyEnable: {}", e))?;
         let _ = key.delete_value("ProxyServer");
         let _ = key.delete_value("ProxyOverride");
+        let _ = key.delete_value("AutoConfigURL");
         Ok(())
     }
 
@@ -137,6 +172,8 @@ mod registry {
 fn sentinel_path() -> std::path::PathBuf {
     std::env::temp_dir().join("bypaxdpi_proxy_active.lock")
 }
+
+/// PAC dosyası yolu — AutoConfigURL ile proxy yapılandırması için
 
 /// Orijinal proxy ayarlarını tutan yapı
 #[derive(Debug, Clone, Default)]
@@ -403,6 +440,11 @@ fn make_pac_body(lan_ip: &str, proxy_port: u16) -> String {
         shExpMatch(host, "*.windowsupdate.com") ||
         shExpMatch(host, "*.delivery.mp.microsoft.com"))
         return "DIRECT";
+
+    // NOT: Oyun/uygulama launcher bypass'ı burada YOK!
+    // PAC server telefon/LAN cihazlarına hizmet eder — bu cihazlarda DPI engeli aktif,
+    // bu yüzden oyun trafiği proxy üzerinden geçmeli.
+    // Windows masaüstünde ise Registry ProxyOverride + WinHTTP bypass ile çözülür.
 
     return "PROXY {}; DIRECT";
 }}"#,
@@ -978,8 +1020,6 @@ fn stop_pac_server(state: tauri::State<'_, PacServerState>) -> Result<(), String
     Ok(())
 }
 
-
-
 #[derive(serde::Serialize)]
 struct ConfigResponse {
     port: u16,
@@ -988,8 +1028,13 @@ struct ConfigResponse {
 }
 
 #[tauri::command]
-fn get_sidecar_config(allow_lan_sharing: bool) -> Result<ConfigResponse, String> {
-    let bind_addr = if allow_lan_sharing {
+fn get_sidecar_config(
+    allow_lan_sharing: bool,
+    enable_game_mode: bool,
+) -> Result<ConfigResponse, String> {
+    // Game Mode (WinHTTP) açıkken 0.0.0.0'a bind et — UWP uygulamaları (Roblox vb.)
+    // AppContainer sandbox yüzünden 127.0.0.1'e erişemez, LAN IP üzerinden bağlanır
+    let bind_addr = if allow_lan_sharing || enable_game_mode {
         "0.0.0.0"
     } else {
         "127.0.0.1"
@@ -1073,6 +1118,14 @@ fn clear_system_proxy() -> Result<(), String> {
         // 5. Notify browsers about the change
         notify_proxy_change();
 
+        // 6. Native/C++ ve arka plan servisleri için WinHTTP sistem proxy'sini sıfırla
+        let _ = std::process::Command::new("netsh")
+            .args(&["winhttp", "reset", "proxy"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
         manage_firewall_rules(false, 0, 0);
     }
 
@@ -1099,13 +1152,38 @@ fn notify_proxy_change() {
     unsafe {
         // Notify that settings have changed
         InternetSetOptionW(null_mut(), INTERNET_OPTION_SETTINGS_CHANGED, null_mut(), 0);
-        // Refresh the settings
         InternetSetOptionW(null_mut(), INTERNET_OPTION_REFRESH, null_mut(), 0);
     }
 }
 
+/// P1-FIX: UWP AppContainer'ları arka planda otomatik olarak Loopback Proxy için yetkilendirir.
+/// Bu sayede Roblox, Speedtest ve diğer Windows Mağaza uygulamaları 127.0.0.1 proxy sunucusuna başarılı şekilde bağlanabilir.
+#[cfg(target_os = "windows")]
+fn exempt_all_uwp_apps() {
+    std::thread::spawn(|| {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        let script = r#"
+            try {
+                $packages = Get-AppxPackage -ErrorAction SilentlyContinue
+                foreach ($pkg in $packages) {
+                    if ($pkg.PackageFamilyName) {
+                        CheckNetIsolation.exe LoopbackExempt -a "-n=$($pkg.PackageFamilyName)"
+                    }
+                }
+            } catch {}
+        "#;
+
+        let _ = std::process::Command::new("powershell")
+            .args(&["-NoProfile", "-WindowStyle", "Hidden", "-Command", script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    });
+}
+
 #[tauri::command]
-fn set_system_proxy(port: u16) -> Result<(), String> {
+fn set_system_proxy(port: u16, enable_winhttp: bool) -> Result<(), String> {
     let _guard = acquire_proxy_lock(); // P0-FIX-3: Poisoned mutex recovery
                                        // ✅ Port aralığı validasyonu
     if port < 1024 {
@@ -1114,6 +1192,10 @@ fn set_system_proxy(port: u16) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
         if !registry::can_access() {
             return Err(
                 "Registry yazma izni yok. Uygulamayı yönetici olarak çalıştırın.".to_string(),
@@ -1123,7 +1205,13 @@ fn set_system_proxy(port: u16) -> Result<(), String> {
         // P0-FIX-2: Proxy ayarlamadan ÖNCE mevcut ayarları yedekle
         backup_proxy_settings();
 
-        registry::set_proxy(port).map_err(|e| {
+        // ✅ CRITICAL FIX: Asla LAN IP kullanma! Roblox vb. UWP Uygulamaları 'privateNetworkClientServer'
+        // yetkisine sahip DEĞİLDİR. Bu yüzden 192.168.x.x (LAN IP) üzerinden bağlandıklarında sistem
+        // güvenlik duvarı (AppContainer) bağlantıyı tamamen keser.
+        // UWP LoopbackExempt (Sanal İzolasyon Kaldırma) SADECE "127.0.0.1" için çalışır.
+        let proxy_addr = "127.0.0.1".to_string();
+
+        registry::set_proxy(&proxy_addr, port).map_err(|e| {
             // Rollback
             let _ = registry::clear_proxy();
             format!("Registry güncelleme başarısız, geri alındı: {}", e)
@@ -1131,6 +1219,30 @@ fn set_system_proxy(port: u16) -> Result<(), String> {
 
         // 3. CRITICAL: Notify Windows about the change so browsers pick it up immediately
         notify_proxy_change();
+
+        // 4. UWP (Windows Mağaza) uygulamaları için loopback isolation yetkisini bypass et
+        exempt_all_uwp_apps();
+
+        // 5. Native/C++ ve arka plan servisleri için WinHTTP sistem proxy'si ayarla
+        if enable_winhttp {
+            // WinHTTP bypass listesini Registry ProxyOverride ile senkronize tut
+            let winhttp_bypass = format!(
+                "bypass-list=\"<local>;{};*.steamcontent.com;*.steamstatic.com;*.cm.steampowered.com;*.epicgames.com;*.unrealengine.com;*.riotgames.com;*.leagueoflegends.com;*.ea.com;*.origin.com;*.blizzard.com;*.battle.net;*.ubisoft.com;*.ubi.com;*.xboxlive.com;*.xbox.com;*.microsoft.com;*.cachefly.net;*.msftconnecttest.com;*.windowsupdate.com\"",
+                proxy_addr
+            );
+            let _ = std::process::Command::new("netsh")
+                .args(&[
+                    "winhttp",
+                    "set",
+                    "proxy",
+                    &format!("{}:{}", proxy_addr, port),
+                    &winhttp_bypass,
+                ])
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
     }
 
     // P0-FIX-1: Sentinel dosyası oluştur — proxy artık aktif
@@ -1377,6 +1489,18 @@ pub fn run() {
             if handle.is_null() || GetLastError() == ERROR_ALREADY_EXISTS {
                 eprintln!("[STARTUP] ❌ BypaxDPI zaten çalışıyor — çıkılıyor");
 
+                use winapi::um::winuser::{
+                    FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
+                };
+                let window_name: Vec<u16> = "BypaxDPI\0".encode_utf16().collect();
+                let hwnd = FindWindowW(null_mut(), window_name.as_ptr());
+                if !hwnd.is_null() {
+                    if IsIconic(hwnd) != 0 {
+                        ShowWindow(hwnd, SW_RESTORE);
+                    }
+                    SetForegroundWindow(hwnd);
+                }
+
                 // Sessizce çık (Multi-user ortamında diğer kullanıcıları rahatsız etme)
                 std::process::exit(0);
             }
@@ -1418,6 +1542,10 @@ pub fn run() {
                     .on_menu_event(|app, event| match event.id.as_ref() {
                         "quit" => {
                             if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.unminimize();
+                                let _ = window.show();
+                                let _ = window.set_focus(); // ✅ Pencereyi kapatmadan önce onay kutusu için öne getir!
+
                                 let _ = window.emit("tray_quit", ());
                                 let _ = window.close();
                             } else {

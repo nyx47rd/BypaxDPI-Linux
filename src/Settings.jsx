@@ -351,8 +351,7 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
                       desc: t[descKey] || '',
                       icon: ICON_MAP[isp.id] || <Globe size={18} />,
                     };
-                    const isApplied = config.selectedIspProfile === ispData.id && 
-                                     config.dpiMethod === ispData.mode && 
+                    const isApplied = config.dpiMethod === ispData.mode && 
                                      Number(config.httpsChunkSize) === Number(ispData.chunk);
                     const isExpanded = expandedISP === ispData.id;
 
@@ -679,7 +678,7 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
                 <div className="v2-card">
                   
                   {/* YENİ EKLENEN IPv4 TOGGLE'I */}
-                  <div className="v2-item" style={{ padding: '1rem' }}>
+                  <div className="v2-item" style={{ padding: '1rem', borderBottom: '1px solid rgba(255, 255, 255, 0.05)' }}>
                     <div className="v2-icon" style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444' }}>
                       <Activity size={20} />
                     </div>
@@ -689,6 +688,18 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
                     </div>
                     {/* ipv4Only undefined ise default true kabul ediyoruz */}
                     <Toggle checked={config.ipv4Only !== false} onChange={(v) => updateConfig('ipv4Only', v)} />
+                  </div>
+
+                  {/* YENİ: WinHTTP OYUN MODU TOGGLE'I */}
+                  <div className="v2-item" style={{ padding: '1rem' }}>
+                    <div className="v2-icon" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>
+                       <Youtube size={20} />
+                    </div>
+                    <div className="v2-item-text">
+                      <h3 style={{ color: '#93c5fd' }}>{t.winHttpForceTitle}</h3>
+                      <p>{t.winHttpForceDesc}</p>
+                    </div>
+                    <Toggle checked={config.enableWinhttp !== false} onChange={(v) => updateConfig('enableWinhttp', v)} />
                   </div>
 
                 </div>
