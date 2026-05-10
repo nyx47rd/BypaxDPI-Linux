@@ -52,6 +52,20 @@ fn main() {
                 .status();
         }
 
+        #[cfg(target_os = "linux")]
+        {
+            // gsettings proxy kapat
+            let _ = std::process::Command::new("gsettings")
+                .args(["set", "org.gnome.system.proxy", "mode", "none"])
+                .status();
+
+            // Zombi bypass-proxy süreçlerini de öldür
+            let _ = std::process::Command::new("pkill")
+                .arg("-f")
+                .arg("bypax-proxy")
+                .status();
+        }
+
         eprintln!("BypaxDPI PANIC: {}", panic_info);
     }));
 

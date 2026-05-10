@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run update-proxy-icon && vite build",
+    "build": "vite build",
+    "build:win": "npm run update-proxy-icon && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "update-proxy-icon": "node change-icon.js",
