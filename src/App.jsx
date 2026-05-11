@@ -758,6 +758,12 @@ function App() {
               i18nKey: "logProxySet",
               i18nParams: [port],
             });
+
+            // Linux specific info log
+            if (window.__TAURI_INTERNALS__?.metadata?.target_os === 'linux') {
+              addLog(t.logLinuxProxyInfo, "info", { i18nKey: "logLinuxProxyInfo" });
+            }
+
             if (configRef.current.enableWinhttp !== false) {
               addLog(t.logWinHttpEnabled, "warn", { i18nKey: "logWinHttpEnabled" });
             }

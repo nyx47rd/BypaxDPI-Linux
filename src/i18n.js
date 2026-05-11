@@ -405,6 +405,7 @@ const translations = {
     logWinHttpEnabled: 'Game Mode (WinHTTP) proxy tunnel applied.',
     logWpcapMissing: 'SpoofDPI could not find wpcap.dll. Please install Npcap or WinPcap, then restart the application.',
     logAntivirusWarning: 'Windows Defender or your antivirus software may have blocked \'bypax-proxy.exe\'. Please add the file to your antivirus exclusion list.',
+    logLinuxProxyInfo: 'Linux proxy settings are managed via gsettings (GNOME/Cinnamon compatible).',
 
     // ===== SETTINGS.JSX =====
     settingsTitle: 'SETTINGS',

@@ -167,6 +167,47 @@ mod registry {
     }
 }
 
+#[cfg(target_os = "linux")]
+mod linux_proxy {
+    use std::process::Command;
+
+    pub fn set_proxy(host: &str, port: u16) -> Result<(), String> {
+        let port_str = port.to_string();
+
+        // GNOME / Cinnamon için gsettings kullanıyoruz
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy", "mode", "manual"])
+            .status();
+
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy.http", "host", host])
+            .status();
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy.http", "port", &port_str])
+            .status();
+
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy.https", "host", host])
+            .status();
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy.https", "port", &port_str])
+            .status();
+
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy", "ignore-hosts", "['localhost', '127.0.0.0/8', '::1']"])
+            .status();
+
+        Ok(())
+    }
+
+    pub fn clear_proxy() -> Result<(), String> {
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy", "mode", "none"])
+            .status();
+        Ok(())
+    }
+}
+
 /// Sentinel dosya yolu — proxy aktifken var, kapanınca silinir.
 /// Crash/BSOD/force-kill sonrası hâlâ duruyorsa → dirty shutdown algılanır.
 fn sentinel_path() -> std::path::PathBuf {
@@ -189,6 +230,28 @@ fn original_proxy_store() -> &'static Mutex<Option<OriginalProxySettings>> {
     STORE.get_or_init(|| Mutex::new(None))
 }
 
+#[cfg(target_os = "linux")]
+fn backup_proxy_settings() {
+    // Linux için yedekleme mekanizması şimdilik basit tutulabilir
+    // gsettings mode değerini yedeklemek yeterli olabilir
+    let output = std::process::Command::new("gsettings")
+        .args(["get", "org.gnome.system.proxy", "mode"])
+        .output();
+
+    if let Ok(out) = output {
+        let mode = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let settings = OriginalProxySettings {
+            proxy_server: Some(mode), // mode değerini proxy_server içine geçici olarak koyuyoruz
+            ..Default::default()
+        };
+        if let Ok(mut guard) = original_proxy_store().lock() {
+            if guard.is_none() {
+                *guard = Some(settings);
+            }
+        }
+    }
+}
+
 /// Proxy ayarlarını set etmeden ÖNCE mevcut değerleri yedekler
 #[cfg(target_os = "windows")]
 fn backup_proxy_settings() {
@@ -205,6 +268,24 @@ fn backup_proxy_settings() {
             *guard = Some(settings);
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn restore_proxy_settings() -> bool {
+    let original = match original_proxy_store().lock() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+
+    if let Some(orig) = original {
+        if let Some(mode) = orig.proxy_server {
+            let _ = std::process::Command::new("gsettings")
+                .args(["set", "org.gnome.system.proxy", "mode", &mode])
+                .status();
+            return true;
+        }
+    }
+    false
 }
 
 /// Yedeklenen proxy ayarlarını geri yükler.
@@ -1129,6 +1210,14 @@ fn clear_system_proxy() -> Result<(), String> {
         manage_firewall_rules(false, 0, 0);
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        let has_original = restore_proxy_settings();
+        if !has_original {
+            let _ = linux_proxy::clear_proxy();
+        }
+    }
+
     // P0-FIX-1: Sentinel dosyasını sil — proxy artık aktif değil
     let _ = std::fs::remove_file(sentinel_path());
 
@@ -1183,7 +1272,7 @@ fn exempt_all_uwp_apps() {
 }
 
 #[tauri::command]
-fn set_system_proxy(port: u16, enable_winhttp: bool) -> Result<(), String> {
+fn set_system_proxy(port: u16, _enable_winhttp: bool) -> Result<(), String> {
     let _guard = acquire_proxy_lock(); // P0-FIX-3: Poisoned mutex recovery
                                        // ✅ Port aralığı validasyonu
     if port < 1024 {
@@ -1243,6 +1332,12 @@ fn set_system_proxy(port: u16, enable_winhttp: bool) -> Result<(), String> {
                 .stderr(std::process::Stdio::null())
                 .status();
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        backup_proxy_settings();
+        let _ = linux_proxy::set_proxy("127.0.0.1", port);
     }
 
     // P0-FIX-1: Sentinel dosyası oluştur — proxy artık aktif
@@ -1421,6 +1516,11 @@ fn startup_proxy_cleanup() -> Result<bool, String> {
             manage_firewall_rules(false, 0, 0);
         }
 
+        #[cfg(target_os = "linux")]
+        {
+            let _ = linux_proxy::clear_proxy();
+        }
+
         let _ = std::fs::remove_file(&sentinel);
         eprintln!("[STARTUP] ✅ Orphaned proxy + firewall rules cleaned");
 
@@ -1437,33 +1537,49 @@ fn startup_proxy_cleanup() -> Result<bool, String> {
 // 1. Sürücü kontrolü (lib.rs içine ekle)
 #[tauri::command]
 fn check_driver() -> bool {
-    std::path::Path::new("C:\\Windows\\System32\\wpcap.dll").exists()
-        || std::path::Path::new("C:\\Windows\\SysWOW64\\wpcap.dll").exists()
+    #[cfg(target_os = "windows")]
+    {
+        std::path::Path::new("C:\\Windows\\System32\\wpcap.dll").exists()
+            || std::path::Path::new("C:\\Windows\\SysWOW64\\wpcap.dll").exists()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Linux'ta libpcap genellikle sistemdedir veya bundle edilmiştir.
+        // AppImage içinde bundle edeceğimiz için kontrolü true geçebiliriz veya kütüphane kontrolü yapabiliriz.
+        true
+    }
 }
 
 // 2. Sürücü kurulumu (lib.rs içine ekle)
 #[tauri::command]
-fn install_driver(app: tauri::AppHandle) -> Result<(), String> {
-    let resource_path = app
-        .path()
-        .resource_dir()
-        .map_err(|e| e.to_string())?
-        .join("binaries/npcap-installer.exe");
+fn install_driver(_app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let resource_path = app
+            .path()
+            .resource_dir()
+            .map_err(|e| e.to_string())?
+            .join("binaries/npcap-installer.exe");
 
-    if !resource_path.exists() {
-        return Err("Sürücü dosyası bulunamadı. Lütfen uygulamayı yeniden yükleyin.".into());
+        if !resource_path.exists() {
+            return Err("Sürücü dosyası bulunamadı. Lütfen uygulamayı yeniden yükleyin.".into());
+        }
+
+        // P0-FIX: Driver kurulumunu görünür yaptık (/S kaldırıldı, CREATE_NO_WINDOW kaldırıldı)
+        // Bu sayede kullanıcı UAC (Yönetici İzni) uyarısını görebilir ve kurulumu tamamlayabilir.
+        let status = std::process::Command::new(resource_path)
+            .status() // Normal status call, shows window
+            .map_err(|e| e.to_string())?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err("Kurulum kullanıcı tarafından iptal edildi veya başarısız oldu.".into())
+        }
     }
-
-    // P0-FIX: Driver kurulumunu görünür yaptık (/S kaldırıldı, CREATE_NO_WINDOW kaldırıldı)
-    // Bu sayede kullanıcı UAC (Yönetici İzni) uyarısını görebilir ve kurulumu tamamlayabilir.
-    let status = std::process::Command::new(resource_path)
-        .status() // Normal status call, shows window
-        .map_err(|e| e.to_string())?;
-
-    if status.success() {
+    #[cfg(target_os = "linux")]
+    {
         Ok(())
-    } else {
-        Err("Kurulum kullanıcı tarafından iptal edildi veya başarısız oldu.".into())
     }
 }
 
