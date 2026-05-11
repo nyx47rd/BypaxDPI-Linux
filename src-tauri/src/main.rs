@@ -60,6 +60,8 @@ fn main() {
                 .status();
 
             // Zombi bypass-proxy süreçlerini de öldür
+            // NOT: pkill -f riskli olabilir ancak tauri sidecar isimlendirmesi (bypax-proxy-...)
+            // oldukça özgün olduğu için çakışma ihtimali düşüktür.
             let _ = std::process::Command::new("pkill")
                 .arg("-f")
                 .arg("bypax-proxy")

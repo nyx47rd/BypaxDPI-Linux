@@ -70,6 +70,7 @@ function App() {
   const [isAdmin, setIsAdmin] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine); // ✅ Internet Durumu
   const [dnsLatencies, setDnsLatencies] = useState({}); // ✅ #5: DNS ping sonuçları kalcı
+  const [osType, setOsType] = useState("");
   const [appIsClosingState, setAppIsClosingState] = useState(false); // Shutdown UX
   const [closingStep, setClosingStep] = useState(0);
   const [closingDots, setClosingDots] = useState("");
@@ -93,6 +94,10 @@ function App() {
 
   // Check Admin on Mount
   useEffect(() => {
+    invoke("get_os_info")
+      .then((type) => setOsType(type))
+      .catch(console.error);
+
     invoke("check_admin")
       .then((result) => {
         setIsAdmin(result);
@@ -760,7 +765,7 @@ function App() {
             });
 
             // Linux specific info log
-            if (window.__TAURI_INTERNALS__?.metadata?.target_os === 'linux') {
+            if (osType === 'linux') {
               addLog(t.logLinuxProxyInfo, "info", { i18nKey: "logLinuxProxyInfo" });
             }
 

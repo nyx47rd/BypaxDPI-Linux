@@ -171,40 +171,39 @@ mod registry {
 mod linux_proxy {
     use std::process::Command;
 
+    fn run_gsettings(args: &[&str]) -> Result<(), String> {
+        let status = Command::new("gsettings")
+            .args(args)
+            .status()
+            .map_err(|e| format!("gsettings komutu çalıştırılamadı: {}", e))?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("gsettings hatası (args: {:?})", args))
+        }
+    }
+
     pub fn set_proxy(host: &str, port: u16) -> Result<(), String> {
         let port_str = port.to_string();
 
         // GNOME / Cinnamon için gsettings kullanıyoruz
-        let _ = Command::new("gsettings")
-            .args(["set", "org.gnome.system.proxy", "mode", "manual"])
-            .status();
+        run_gsettings(&["set", "org.gnome.system.proxy.http", "host", host])?;
+        run_gsettings(&["set", "org.gnome.system.proxy.http", "port", &port_str])?;
 
-        let _ = Command::new("gsettings")
-            .args(["set", "org.gnome.system.proxy.http", "host", host])
-            .status();
-        let _ = Command::new("gsettings")
-            .args(["set", "org.gnome.system.proxy.http", "port", &port_str])
-            .status();
+        run_gsettings(&["set", "org.gnome.system.proxy.https", "host", host])?;
+        run_gsettings(&["set", "org.gnome.system.proxy.https", "port", &port_str])?;
 
-        let _ = Command::new("gsettings")
-            .args(["set", "org.gnome.system.proxy.https", "host", host])
-            .status();
-        let _ = Command::new("gsettings")
-            .args(["set", "org.gnome.system.proxy.https", "port", &port_str])
-            .status();
+        run_gsettings(&["set", "org.gnome.system.proxy", "ignore-hosts", "['localhost', '127.0.0.0/8', '::1']"])?;
 
-        let _ = Command::new("gsettings")
-            .args(["set", "org.gnome.system.proxy", "ignore-hosts", "['localhost', '127.0.0.0/8', '::1']"])
-            .status();
+        // En son mode set ediyoruz ki ayarlar hazır olsun
+        run_gsettings(&["set", "org.gnome.system.proxy", "mode", "manual"])?;
 
         Ok(())
     }
 
     pub fn clear_proxy() -> Result<(), String> {
-        let _ = Command::new("gsettings")
-            .args(["set", "org.gnome.system.proxy", "mode", "none"])
-            .status();
-        Ok(())
+        run_gsettings(&["set", "org.gnome.system.proxy", "mode", "none"])
     }
 }
 
@@ -219,9 +218,14 @@ fn sentinel_path() -> std::path::PathBuf {
 /// Orijinal proxy ayarlarını tutan yapı
 #[derive(Debug, Clone, Default)]
 struct OriginalProxySettings {
+    #[allow(dead_code)]
     proxy_enable: Option<u32>,
+    #[allow(dead_code)]
     proxy_server: Option<String>,
+    #[allow(dead_code)]
     proxy_override: Option<String>,
+    #[cfg(target_os = "linux")]
+    linux_mode: Option<String>,
 }
 
 /// Orijinal proxy ayarlarını saklayan global state
@@ -232,16 +236,20 @@ fn original_proxy_store() -> &'static Mutex<Option<OriginalProxySettings>> {
 
 #[cfg(target_os = "linux")]
 fn backup_proxy_settings() {
-    // Linux için yedekleme mekanizması şimdilik basit tutulabilir
-    // gsettings mode değerini yedeklemek yeterli olabilir
+    // Linux için yedekleme mekanizması: gsettings mode değerini yedekle
     let output = std::process::Command::new("gsettings")
         .args(["get", "org.gnome.system.proxy", "mode"])
         .output();
 
     if let Ok(out) = output {
-        let mode = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        // gsettings get çıktısı tırnaklı gelir (örn: 'manual'). Bunu temizle.
+        let mode = String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .trim_matches('\'')
+            .to_string();
+
         let settings = OriginalProxySettings {
-            proxy_server: Some(mode), // mode değerini proxy_server içine geçici olarak koyuyoruz
+            linux_mode: Some(mode),
             ..Default::default()
         };
         if let Ok(mut guard) = original_proxy_store().lock() {
@@ -278,7 +286,7 @@ fn restore_proxy_settings() -> bool {
     };
 
     if let Some(orig) = original {
-        if let Some(mode) = orig.proxy_server {
+        if let Some(mode) = orig.linux_mode {
             let _ = std::process::Command::new("gsettings")
                 .args(["set", "org.gnome.system.proxy", "mode", &mode])
                 .status();
@@ -1555,6 +1563,7 @@ fn check_driver() -> bool {
 fn install_driver(_app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
+        let app = _app;
         let resource_path = app
             .path()
             .resource_dir()
@@ -1581,6 +1590,11 @@ fn install_driver(_app: tauri::AppHandle) -> Result<(), String> {
     {
         Ok(())
     }
+}
+
+#[tauri::command]
+fn get_os_info() -> String {
+    std::env::consts::OS.to_string()
 }
 
 #[tauri::command]
@@ -1771,6 +1785,7 @@ pub fn run() {
             startup_proxy_cleanup,
             check_driver,
             install_driver,
+            get_os_info,
             quit_app
         ])
         .build(tauri::generate_context!())
